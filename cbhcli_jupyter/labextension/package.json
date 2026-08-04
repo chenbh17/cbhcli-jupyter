@@ -1,0 +1,133 @@
+{
+  "name": "cbhcli-jupyter",
+  "version": "0.2.8",
+  "description": "基于 cbhcli 的 JupyterLab AI 助手插件：侧边栏问答面板 + notebook 代码操作工具",
+  "keywords": [
+    "jupyter",
+    "jupyterlab",
+    "jupyterlab-extension",
+    "ai",
+    "chat",
+    "cbhcli"
+  ],
+  "license": "BSD-3-Clause",
+  "files": [
+    "lib/**/*.{d.ts,eot,gif,html,jpg,js,js.map,json,png,svg,woff2,ttf}",
+    "style/**/*.{css,js,eot,gif,html,jpg,json,png,svg,woff2,ttf}"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "style": "style/index.css",
+  "scripts": {
+    "build": "npm run build:lib && npm run build:labextension:dev",
+    "build:prod": "npm run clean && npm run build:lib && npm run build:labextension",
+    "build:labextension": "jupyter labextension build .",
+    "build:labextension:dev": "jupyter labextension build --development True .",
+    "build:lib": "tsc",
+    "clean": "npm run clean:lib",
+    "clean:lib": "rimraf lib tsconfig.tsbuildinfo",
+    "clean:labextension": "rimraf cbhcli_jupyter/labextension",
+    "clean:all": "npm run clean:lib && npm run clean:labextension",
+    "install:extension": "npm run build",
+    "watch:src": "tsc -w",
+    "watch:labextension": "jupyter labextension watch ."
+  },
+  "dependencies": {
+    "@jupyterlab/application": "^4.0.0",
+    "@jupyterlab/apputils": "^4.0.0",
+    "@jupyterlab/cells": "^4.0.0",
+    "@jupyterlab/codeeditor": "^4.0.0",
+    "@jupyterlab/coreutils": "^6.0.0",
+    "@jupyterlab/docmanager": "^4.0.0",
+    "@jupyterlab/docregistry": "^4.0.0",
+    "@jupyterlab/filebrowser": "^4.0.0",
+    "@jupyterlab/fileeditor": "^4.0.0",
+    "@jupyterlab/notebook": "^4.0.0",
+    "@jupyterlab/outputarea": "^4.0.0",
+    "@jupyterlab/services": "^7.0.0",
+    "@jupyterlab/ui-components": "^4.0.0",
+    "@lumino/signaling": "^2.1.0",
+    "@lumino/widgets": "^2.3.0",
+    "marked": "^18.0.9"
+  },
+  "devDependencies": {
+    "@jupyterlab/builder": "^4.0.0",
+    "@types/node": "^20.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "~5.0.0"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "cbhcli_jupyter/labextension",
+    "sharedPackages": {
+      "@jupyterlab/application": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/apputils": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/cells": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/notebook": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/outputarea": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/ui-components": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/fileeditor": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/filebrowser": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/codeeditor": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/coreutils": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/services": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/docmanager": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/docregistry": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@lumino/widgets": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@lumino/signaling": {
+        "bundled": false,
+        "singleton": true
+      }
+    },
+    "_build": {
+      "load": "static/remoteEntry.89ea1d5af9883b667b9f.js",
+      "extension": "./extension",
+      "style": "./style"
+    }
+  },
+  "dependenciesMeta": {
+    "react": {}
+  }
+}

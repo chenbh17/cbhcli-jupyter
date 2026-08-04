@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.5.0", "jupyterlab>=4.0.0,<5", "hatch-nodejs-version>=0.3.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cbhcli_jupyter"
+version = "0.2.8"
+description = "基于 cbhcli 的 JupyterLab AI 助手插件：侧边栏问答面板 + notebook 代码操作工具"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.8"
+authors = [
+    { name = "Chen Binghuan" },
+]
+classifiers = [
+    "Framework :: Jupyter",
+    "Framework :: Jupyter :: JupyterLab",
+    "Framework :: Jupyter :: JupyterLab :: 4",
+    "Framework :: Jupyter :: JupyterLab :: Extensions",
+    "Framework :: Jupyter :: JupyterLab :: Extensions :: Prebuilt",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "cbhcli>=5.1.7",
+    "jupyter_server>=2.0.0,<3",
+    "fastapi>=0.100",
+    "pydantic>=2.0",
+]
+
+[tool.hatch.build.targets.sdist]
+artifacts = ["cbhcli_jupyter/labextension"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["cbhcli_jupyter"]
+
+# 前端产物（npm run build:prod 生成）作为 shared-data 安装到 JupyterLab 的
+# labextensions 数据目录（{sys.prefix}/share/jupyter/labextensions/）——
+# JupyterLab 4 只从此目录发现 federated extension（site-packages 中的不会被扫描）。
+[tool.hatch.build.targets.wheel.shared-data]
+"cbhcli_jupyter/labextension" = "share/jupyter/labextensions/cbhcli-jupyter"
