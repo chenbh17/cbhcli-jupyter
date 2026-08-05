@@ -1,6 +1,6 @@
 {
   "name": "cbhcli-jupyter",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "基于 cbhcli 的 JupyterLab AI 助手插件：侧边栏问答面板 + notebook 代码操作工具",
   "keywords": [
     "jupyter",
@@ -122,7 +122,7 @@
       }
     },
     "_build": {
-      "load": "static/remoteEntry.17d20b8b14df0e94d7a0.js",
+      "load": "static/remoteEntry.7947aaea05234c25d661.js",
       "extension": "./extension",
       "style": "./style"
     }

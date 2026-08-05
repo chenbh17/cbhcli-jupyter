@@ -850,15 +850,14 @@ export class NotebookClient {
       cell.model.sharedModel.setSource(newCode);
     }
 
+    let typeNote = '';
     if (params.cell_type && params.cell_type !== cell.model.type) {
-      try {
-        (cell.model.sharedModel as any).setCellType?.(params.cell_type);
-      } catch {
-        /* cell 类型修改失败时忽略 */
-      }
+      typeNote = this._setCellType(nb, index, params.cell_type)
+        ? `，类型改为 ${params.cell_type}`
+        : '，但类型修改失败';
     }
     return ok(
-      `已修改 cell ${index}${params.selection_text !== undefined ? '（替换片段）' : '（整体替换）'}`
+      `已修改 cell ${index}${params.selection_text !== undefined ? '（替换片段）' : '（整体替换）'}${typeNote}`
     );
   }
 
@@ -897,6 +896,59 @@ export class NotebookClient {
     }
   }
 
+  /** 修改指定 cell 的类型（code/markdown/raw）。
+   *
+   * 走共享模型 `deleteCell + insertCell`（对齐 JupyterLab `Private.changeCellType`
+   * 的内部实现），按 index 精确定位、不依赖选区，不会打断用户当前选中/活动状态。
+   * ⚠️ JupyterLab 4 的 `ICellSharedModel` 上没有 `setCellType` 方法，直接调
+   * `sharedModel.setCellType?.()` 是静默 no-op（旧实现的 bug）。
+   * @returns 是否成功（已是目标类型时返回 true）。
+   */
+  private _setCellType(nb: NotebookPanel, index: number, cellType: string): boolean {
+    try {
+      const model = nb.content.model;
+      if (!model) {
+        return false;
+      }
+      const cellModel = model.cells.get(index) as any;
+      if (!cellModel) {
+        return false;
+      }
+      if (cellModel.type === cellType) {
+        return true; // 已是目标类型
+      }
+      const sharedModel = model.sharedModel as any; // YNotebookModel
+      const raw: any = cellModel.toJSON();
+      if (cellType === 'code') {
+        raw.metadata.trusted = true; // 转 code 后清输出，可重新信任
+      } else {
+        raw.metadata.trusted = undefined; // trusted 仅对 code cell 有效
+      }
+      sharedModel.transact(() => {
+        sharedModel.deleteCell(index);
+        const newCell = sharedModel.insertCell(index, {
+          id: raw.id,
+          cell_type: cellType,
+          source: raw.source,
+          metadata: raw.metadata
+        });
+        if (raw.attachments && (cellType === 'markdown' || cellType === 'raw')) {
+          newCell.attachments = raw.attachments;
+        }
+      });
+      // markdown 默认不渲染（与 JupyterLab 行为一致）
+      if (cellType === 'markdown') {
+        const w = nb.content.widgets[index] as any;
+        if (w) {
+          w.rendered = false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ------------------------------------------------------------------
   //  4. nb_insert_cell
   // ------------------------------------------------------------------
@@ -925,18 +977,15 @@ export class NotebookClient {
     }
     newCell.model.sharedModel.setSource(code);
     if (cellType === 'markdown') {
-      try {
-        (newCell.model.sharedModel as any).setCellType?.('markdown');
-      } catch {
-        /* ignore */
-      }
+      this._setCellType(nb, index, 'markdown');
     }
-    if (params.execute) {
-      if (newCell instanceof CodeCell) {
+    if (params.execute && cellType === 'code') {
+      const codeCell = nb.content.activeCell;
+      if (codeCell instanceof CodeCell) {
         void this._executeCellInPlace(
           nb,
-          newCell,
-          String(newCell.model.sharedModel.getSource() ?? ''),
+          codeCell,
+          String(codeCell.model.sharedModel.getSource() ?? ''),
           300000
         );
       }

@@ -97,6 +97,15 @@ export declare class NotebookClient {
     private _editCell;
     /** 读取 cell 编辑器当前选区（文本 + 源码偏移量）。无选区返回 null。 */
     private _cellSelectionRange;
+    /** 修改指定 cell 的类型（code/markdown/raw）。
+     *
+     * 走共享模型 `deleteCell + insertCell`（对齐 JupyterLab `Private.changeCellType`
+     * 的内部实现），按 index 精确定位、不依赖选区，不会打断用户当前选中/活动状态。
+     * ⚠️ JupyterLab 4 的 `ICellSharedModel` 上没有 `setCellType` 方法，直接调
+     * `sharedModel.setCellType?.()` 是静默 no-op（旧实现的 bug）。
+     * @returns 是否成功（已是目标类型时返回 true）。
+     */
+    private _setCellType;
     private _insertCell;
     private _deleteCell;
     private _executeCell;
