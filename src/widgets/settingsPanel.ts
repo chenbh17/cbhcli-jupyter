@@ -64,6 +64,8 @@ function el(tag: string, attrs: Record<string, any> = {}, ...children: any[]): H
 
 export class SettingsPanel extends Widget {
   private _root!: HTMLElement;
+  /** 历史会话折叠状态（true=收起只显示标题行）。跨 refresh 保留。 */
+  private _historyCollapsed = false;
 
   constructor(private _ctx: SettingsCtx) {
     super();
@@ -339,7 +341,7 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildHistorySection(): Promise<HTMLElement> {
-    const group = this._section('🕘 历史会话');
+    const group = el('div', { class: 'cbhcli-settings-group' });
     const agent = this._ctx.getAgent();
     let sessions: any[] = [];
     try {
@@ -348,23 +350,70 @@ export class SettingsPanel extends Widget {
     } catch {
       sessions = [];
     }
-    if (sessions.length === 0) {
-      group.appendChild(el('div', { class: 'cbhcli-empty' }, '暂无历史会话'));
-      return group;
-    }
+
+    // 可折叠头部：点击标题行展开/收起整个列表（v0.2.9）
+    const head = el('div', { class: 'cbhcli-history-head' });
+    const chevron = el('span', { class: 'cbhcli-history-chevron' }, this._historyCollapsed ? '▸' : '▾');
+    head.appendChild(chevron);
+    head.appendChild(el('div', { class: 'cbhcli-settings-title' }, `🕘 历史会话（${sessions.length}）`));
+    group.appendChild(head);
+
     const list = el('div', { class: 'cbhcli-history-list' });
-    for (const s of sessions.slice(0, 20)) {
-      const item = el('div', { class: 'cbhcli-history-item' });
-      const label = `${s.filename || s.id || ''} · ${s.message_count || 0} 条`;
-      item.appendChild(el('span', { class: 'cbhcli-history-label' }, label));
-      const btns = el('div', { class: 'cbhcli-model-actions' });
-      btns.appendChild(el('button', { class: 'cbhcli-btn cbhcli-btn-small', onclick: () => this._loadHistory(s.filename) }, '恢复'));
-      btns.appendChild(el('button', { class: 'cbhcli-btn cbhcli-btn-small cbhcli-btn-danger', onclick: () => this._deleteHistory(s.filename) }, '删除'));
-      item.appendChild(btns);
-      list.appendChild(item);
+    if (sessions.length === 0) {
+      list.appendChild(el('div', { class: 'cbhcli-empty' }, '暂无历史会话'));
+    } else {
+      // 显示会话标题（首条用户消息）+ 条数 + 日期，而非仅 JSON 文件名
+      for (const s of sessions.slice(0, 50)) {
+        list.appendChild(this._historyItem(s));
+      }
     }
+    if (this._historyCollapsed) {
+      list.classList.add('collapsed');
+    }
+    head.addEventListener('click', () => {
+      this._historyCollapsed = !this._historyCollapsed;
+      list.classList.toggle('collapsed', this._historyCollapsed);
+      chevron.textContent = this._historyCollapsed ? '▸' : '▾';
+    });
+
     group.appendChild(list);
     return group;
+  }
+
+  /** 单个历史会话条目：标题（首条用户消息）+ 元信息 + 恢复/删除。 */
+  private _historyItem(s: any): HTMLElement {
+    const item = el('div', { class: 'cbhcli-history-item' });
+    const main = el('div', { class: 'cbhcli-history-main' });
+    const title = (s.title || '').trim() || s.filename || s.id || '空会话';
+    const titleEl = el('div', { class: 'cbhcli-history-title-text' }, title);
+    titleEl.title = s.filename || ''; // 悬停显示文件名
+    main.appendChild(titleEl);
+    const metaText = `${s.message_count || 0} 条` +
+      (s.created_at ? ` · ${this._fmtHistoryDate(s.created_at)}` : '');
+    main.appendChild(el('div', { class: 'cbhcli-history-meta' }, metaText));
+    item.appendChild(main);
+    const btns = el('div', { class: 'cbhcli-model-actions' });
+    btns.appendChild(el('button', { class: 'cbhcli-btn cbhcli-btn-small', onclick: () => this._loadHistory(s.filename) }, '恢复'));
+    btns.appendChild(el('button', { class: 'cbhcli-btn cbhcli-btn-small cbhcli-btn-danger', onclick: () => this._deleteHistory(s.filename) }, '删除'));
+    item.appendChild(btns);
+    return item;
+  }
+
+  /** ISO 时间 → "MM-DD HH:mm"。 */
+  private _fmtHistoryDate(iso: string): string {
+    if (!iso) {
+      return '';
+    }
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) {
+        return '';
+      }
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch {
+      return '';
+    }
   }
 
   private async _loadHistory(filename: string): Promise<void> {

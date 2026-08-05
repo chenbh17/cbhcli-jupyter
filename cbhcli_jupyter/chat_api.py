@@ -17,6 +17,7 @@ from cbhcli_pkg.web.server import (
     _get_or_create_session as _cbhcli_get_or_create_session,
     _chat_sessions,
     _get_session_key,
+    get_agent_manager,
 )
 
 from .nb_tools import register_notebook_tools, NB_TOOLS
@@ -94,6 +95,11 @@ def set_nb_tools_enabled(cs: WebChatSession, enabled: bool) -> None:
     - 启用 = 从 `_disabled_tools` 移除 nb 工具名。
     只增删 nb 工具，不影响 agent 配置里其他被禁用的工具。
 
+    与工具弹窗的关系（v0.2.9）：用户可在「工具」弹窗单独勾选启停 nb 工具，
+    该偏好持久化在 agent config 的 disabled_tools 中。小眼睛放开 nb 工具时
+    不能把「用户手动禁用」的项也放开，故 enabled=True 时仅放开未被用户禁用的
+    nb 工具。有效启用状态 = (小眼睛允许) AND (用户未禁用)。
+
     注意：`_react_loop` 在循环开始时一次性读取 `get_openai_tools()`，
     因此必须在进入 `_react_loop` 前调用本函数（见 handlers.ChatHandler）。
     """
@@ -104,12 +110,32 @@ def set_nb_tools_enabled(cs: WebChatSession, enabled: bool) -> None:
         nb_names = {t.name for t in NB_TOOLS}
         current = set(getattr(registry, "_disabled_tools", set()) or set())
         if enabled:
-            current -= nb_names
+            current -= nb_names                       # 小眼睛开：放开全部 nb
+            current |= _user_disabled_nb_tools(cs)    # 但用户手动禁用的保持禁用
         else:
-            current |= nb_names
+            current |= nb_names                       # 小眼睛关：禁用全部 nb
         registry.set_disabled_tools(sorted(current))
     except Exception:
         pass
+
+
+def _user_disabled_nb_tools(cs: WebChatSession) -> set:
+    """返回用户在工具弹窗中明确禁用的 nb 工具名集合（读 agent config，实时）。
+
+    toggle_tool 保存配置后不一定回写 cs.agent_config，故这里直接从磁盘加载，
+    避免拿到陈旧的禁用列表。
+    """
+    try:
+        agent_name = getattr(cs, "agent_name", "") or ""
+        if not agent_name:
+            return set()
+        config = get_agent_manager().load_agent(agent_name)
+        if config and getattr(config, "disabled_tools", None):
+            nb_names = {t.name for t in NB_TOOLS}
+            return nb_names & set(config.disabled_tools)
+    except Exception:
+        pass
+    return set()
 
 
 def _grant_readonly_permission(cs: WebChatSession) -> None:

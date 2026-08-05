@@ -13,6 +13,8 @@ interface SettingsCtx {
 export declare class SettingsPanel extends Widget {
     private _ctx;
     private _root;
+    /** 历史会话折叠状态（true=收起只显示标题行）。跨 refresh 保留。 */
+    private _historyCollapsed;
     constructor(_ctx: SettingsCtx);
     refresh(): Promise<void>;
     private _buildModelsSection;
@@ -25,6 +27,10 @@ export declare class SettingsPanel extends Widget {
     private _buildPermissionsSection;
     private _setPermissionMode;
     private _buildHistorySection;
+    /** 单个历史会话条目：标题（首条用户消息）+ 元信息 + 恢复/删除。 */
+    private _historyItem;
+    /** ISO 时间 → "MM-DD HH:mm"。 */
+    private _fmtHistoryDate;
     private _loadHistory;
     private _deleteHistory;
     private _selectModel;

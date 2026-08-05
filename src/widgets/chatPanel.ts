@@ -657,8 +657,10 @@ export class CbhcliPanel extends Widget {
             const enabled = t.enabled !== false;
             const row = el('label', { class: 'cbhcli-check-row' + (enabled ? ' on' : '') });
             const box = el('input', { type: 'checkbox', checked: enabled }) as HTMLInputElement;
+            const stateEl = el('span', { class: 'cbhcli-check-state' }, enabled ? '已启用' : '已禁用');
             box.addEventListener('change', () => {
               row.classList.toggle('on', box.checked);
+              stateEl.textContent = box.checked ? '已启用' : '已禁用';
               void apiPut(
                 `agents/${encodeURIComponent(this._agentName)}/tools/${encodeURIComponent(t.name)}`,
                 { enable: box.checked }
@@ -666,13 +668,14 @@ export class CbhcliPanel extends Widget {
                 console.error(`工具开关失败 ${t.name}:`, err);
                 box.checked = !box.checked;
                 row.classList.toggle('on', box.checked);
+                stateEl.textContent = box.checked ? '已启用' : '已禁用';
               });
             });
             const nameEl = el('span', { class: 'cbhcli-check-name' }, t.name);
             nameEl.title = t.description || '';
             row.appendChild(box);
             row.appendChild(nameEl);
-            row.appendChild(el('span', { class: 'cbhcli-check-state' }, enabled ? '已启用' : '已禁用'));
+            row.appendChild(stateEl);
             body.appendChild(row);
           }
         }

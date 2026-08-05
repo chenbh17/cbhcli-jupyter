@@ -188,7 +188,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.2.8",
+            "version": "0.2.9",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -710,6 +710,35 @@ class NotebookActiveHandler(tornado.web.RequestHandler):
         _send_json(self, {"ok": True})
 
 
+class AgentToolsHandler(tornado.web.RequestHandler):
+    """工具列表（内置工具 + notebook 工具）。
+
+    cbhcli 的 list_tools 只返回 BUILTIN_TOOLS；这里追加 cbhcli-jupyter 的
+    notebook 工具（category="Notebook 工具"），让用户能在「工具」弹窗里勾选启停。
+    启停偏好与内置工具一致，持久化在 agent config 的 disabled_tools（toggle_tool 通用）。
+    小眼睛严格模式仍会在每次请求时整体放开/收起 nb 工具，但不会放开用户手动禁用的项
+    （见 chat_api.set_nb_tools_enabled）。
+    """
+
+    def get(self, agent_name):
+        try:
+            data = list_tools(agent_name)  # cbhcli web 端点函数（返回 dict）
+            tools = list(data.get("tools", []))
+            disabled = set(data.get("disabled", []))
+            from .nb_tools import NB_TOOLS
+            for t in NB_TOOLS:
+                tools.append({
+                    "name": t.name,
+                    "description": t.description,
+                    "category": "Notebook 工具",
+                    "enabled": t.name not in disabled,
+                })
+            data["tools"] = tools
+            _send_json(self, data)
+        except Exception as e:
+            _handle_error(self, e)
+
+
 # ===================================================================
 #  路由表
 # ===================================================================
@@ -780,7 +809,8 @@ handlers = [
     (rf"{PREFIX}/chat/load", ChatLoadHandler),
 
     # --- 工具管理（勾选启用/禁用） ---
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools", api_handler(list_tools, path_args=("agent_name",))),
+    # GET 用自定义 handler：内置工具 + notebook 工具（category="Notebook 工具"）
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools", AgentToolsHandler),
     (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools/(?P<tool_name>[^/]+)", api_handler(toggle_tool, model_cls=Toggle, body_arg="body", path_args=("agent_name", "tool_name"))),
 
     # --- 技能管理（勾选激活/停用） ---
