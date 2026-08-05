@@ -25,6 +25,7 @@ class UITask:
         self.params: dict = params or {}
         self.timeout: float = timeout
         self.created_at: float = time.time()
+        self.claimed_at: Optional[float] = None  # 已派发给前端的时间（claim-once）
         self._done = threading.Event()
         self.result: Optional[dict] = None
 
@@ -75,7 +76,15 @@ class UITaskQueue:
         return task
 
     def pending(self, limit: int = 20) -> list:
-        """获取所有待执行任务（前端轮询用）。超时任务自动标记失败。"""
+        """获取待执行任务（前端轮询用）。超时任务自动标记失败。
+
+        ⚠️ claim-once（v0.2.11 修复）：每个任务只派发一次，已派发的任务不再重复返回。
+        旧实现每次轮询都返回全部未完成任务，前端每 200ms 轮询一次会把「执行中」
+        的长任务（如 nb_execute_cell 输出大量图片）重复派发 N 次 → 同一 cell 被并发
+        执行多次，后一次 `OutputArea.future` 覆盖前一次时 dispose 旧 future，
+        触发 "Canceled future for execute_request message before replies were done"。
+        改为派发时打 claim 标记，防止重复；前端崩溃未回传时由 wait() 超时兜底。
+        """
         with self._mutex:
             now = time.time()
             items = []
@@ -88,6 +97,9 @@ class UITaskQueue:
                         "error": f"后端等待超时（{t.timeout:.0f}s），任务已失效",
                     })
                     continue
+                if t.claimed_at is not None:
+                    continue  # 已派发过，前端正在处理（不再重复派发）
+                t.claimed_at = now
                 items.append({
                     "task_id": tid,
                     "action": t.action,

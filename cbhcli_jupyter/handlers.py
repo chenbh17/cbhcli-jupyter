@@ -188,7 +188,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.2.10",
+            "version": "0.2.11",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",

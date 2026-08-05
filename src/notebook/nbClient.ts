@@ -54,6 +54,8 @@ export interface SelectionContext {
 export class NotebookClient {
   private _timer: number | null = null;
   private _polling = false;
+  /** 正在执行的任务 id 集合（v0.2.11：防止轮询重复派发同一任务导致并发执行）。 */
+  private _inflight = new Set<string>();
 
   constructor(
     private _app: JupyterFrontEnd,
@@ -516,7 +518,13 @@ export class NotebookClient {
     try {
       const res = await apiGet<{ tasks: any[] }>('notebook/pending');
       for (const task of res.tasks || []) {
-        // 逐个执行并回传（不阻塞轮询）
+        // 已在执行中的任务跳过，避免同一长任务（如 nb_execute_cell）被重复派发
+        // → 同一 cell 并发执行多次，后一次 OutputArea.future 覆盖前一次时 dispose
+        //   旧 future，触发 "Canceled future for execute_request ..." 错误
+        if (this._inflight.has(task.task_id)) {
+          continue;
+        }
+        this._inflight.add(task.task_id);
         void this._runTask(task);
       }
     } catch {
@@ -566,6 +574,7 @@ export class NotebookClient {
     } catch {
       /* 回传失败由后端超时兜底 */
     }
+    this._inflight.delete(task.task_id);
   }
 
   // ------------------------------------------------------------------
@@ -1074,6 +1083,20 @@ export class NotebookClient {
     const kernel = sessionContext.session?.kernel;
     if (!kernel) {
       return fail('notebook 内核未连接（请先启动内核）');
+    }
+    // 防护（v0.2.11）：若同一 cell 上一次执行尚未结束（旧 future 仍挂起），先等它
+    // 收尾（最多 5s）。否则新 `OutputArea.execute` 会覆盖 `output.future` 并 dispose
+    // 旧 future → 旧执行报 "Canceled future for execute_request ..."。
+    try {
+      const prevFuture = (cell.outputArea as any).future as any;
+      if (prevFuture && !prevFuture.isDisposed) {
+        await Promise.race([
+          prevFuture.done,
+          new Promise(resolve => window.setTimeout(resolve, 5000))
+        ]);
+      }
+    } catch {
+      /* 上一次执行被取消/中断，忽略并继续 */
     }
     try {
       cell.outputArea.model.clear();

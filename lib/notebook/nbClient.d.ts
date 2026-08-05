@@ -33,6 +33,8 @@ export declare class NotebookClient {
     private _tracker;
     private _timer;
     private _polling;
+    /** 正在执行的任务 id 集合（v0.2.11：防止轮询重复派发同一任务导致并发执行）。 */
+    private _inflight;
     constructor(_app: JupyterFrontEnd, _tracker: INotebookTracker);
     /** 启动 UI 任务轮询（200ms 间隔）。 */
     start(): void;
