@@ -25,7 +25,8 @@ import {
   renderToolResult,
   stripAnsi,
   normalizeTodos,
-  todoPanelEl
+  todoPanelEl,
+  renderDiagrams
 } from './render';
 
 // ---------------------------------------------------------------------------
@@ -1242,6 +1243,8 @@ export class CbhcliPanel extends Widget {
       () => {
         this._setBusy(false);
         this._abortFn = null;
+        // 回复完成后渲染 mermaid / echarts 图表（流式中先显示代码）
+        void renderDiagrams(aiBody);
         void this._refreshStatus();
       }
     );

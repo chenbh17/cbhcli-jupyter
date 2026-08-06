@@ -1338,3 +1338,111 @@ pre:hover .cbh-code-copy-btn { opacity: 1; }
 .cbhcli-todo-item.done { color: #8b949e; }
 .cbhcli-todo-item.done .mark { color: #2ea043; }
 .cbhcli-todo-item.done .cbhcli-todo-text { text-decoration: line-through; opacity: 0.75; }
+
+/* ---------- LaTeX 公式（KaTeX，v0.2.12，深色主题） ---------- */
+/* KaTeX 默认继承 currentColor，深色背景下需给浅色 */
+.cbh-math-block,
+.cbh-math-inline {
+  color: #e6edf3;
+}
+.cbh-math-block {
+  display: block;
+  margin: 10px 0;
+  padding: 8px 6px;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #161b2233;
+  border-radius: 6px;
+}
+.cbh-math-block .katex-display {
+  margin: 0.4em 0;
+}
+.cbh-math-inline .katex {
+  font-size: 1.04em;
+}
+.cbh-math-block .katex {
+  font-size: 1.12em;
+}
+/* 公式内滚动条（窄屏长公式） */
+.cbh-math-block::-webkit-scrollbar {
+  height: 6px;
+}
+.cbh-math-block::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+
+/* ---- Mermaid / ECharts 图表（v0.2.13 + 图片/代码切换 v0.2.14）---- */
+.cbh-diagram-wrap {
+  position: relative;
+  margin: 10px 0;
+  border-radius: 8px;
+  background: #161b2233;
+  border: 1px solid #30363d;
+  overflow: hidden;
+}
+.cbh-diagram-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+}
+.cbh-diagram-tab {
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: #8b949e;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.cbh-diagram-tab:hover {
+  color: #e6edf3;
+}
+.cbh-diagram-tab.active {
+  color: #fff;
+  background: #1f6feb;
+  border-color: #1f6feb;
+}
+.cbh-diagram-view {
+  width: 100%;
+}
+.cbh-diagram-img {
+  padding: 14px 12px 12px;
+  overflow-x: auto;
+}
+.cbh-diagram-img.cbh-mermaid {
+  text-align: center;
+}
+.cbh-diagram-img.cbh-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+.cbh-diagram-code pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  max-height: 420px;
+  overflow: auto;
+}
+.cbh-echarts {
+  width: 100%;
+  height: 360px;
+  min-height: 240px;
+}
+.cbh-diagram-img::-webkit-scrollbar,
+.cbh-diagram-code pre::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.cbh-diagram-img::-webkit-scrollbar-thumb,
+.cbh-diagram-code pre::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}

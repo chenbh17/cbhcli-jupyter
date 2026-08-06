@@ -2,12 +2,14 @@
  * 渲染模块：对齐 cbhcli Web 界面（markdown / 语法高亮 / 代码复制 / 工具 diff / ANSI 清理）。
  * 移植自 cbhcli_pkg/web/static/js/app.js。
  */
+import 'katex/dist/katex.min.css';
 export declare function escapeHtml(s: string): string;
 /** 去除 ANSI 转义序列（终端/工具输出可能携带颜色码，如 \x1b[36m）。 */
 export declare function stripAnsi(s: any): string;
 /** 复制文本到剪贴板（兼容非安全上下文）。 */
 export declare function copyText(text: string): Promise<void>;
 export declare function renderMarkdown(text: string): string;
+export declare function renderDiagrams(container: HTMLElement): Promise<void>;
 export declare function guessLang(filePath: string): string | null;
 export declare function highlightCode(code: string, lang: string | null): string;
 /** 代码块元素（带语法高亮 + 复制按钮 + 可选标签）。 */

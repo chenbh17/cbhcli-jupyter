@@ -4,6 +4,8 @@
  */
 
 import { marked } from 'marked';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 // ---------------------------------------------------------------------------
 //  基础工具
@@ -60,15 +62,343 @@ export function copyText(text: string): Promise<void> {
 
 marked.setOptions({ gfm: true, breaks: true });
 
+// ---------------------------------------------------------------------------
+//  LaTeX 公式渲染（KaTeX，v0.2.12）
+//  渲染正文中的 $$...$$ / \[...\] 块级 与 $...$ / \(...\) 行内公式。
+//  所有代码块（```，含 ```latex/math/tex）与行内代码（`）一律保护为代码，不渲染公式。
+// ---------------------------------------------------------------------------
+
+interface MathSeg {
+  tex: string;
+  display: boolean;
+}
+
+/** 用 KaTeX 把 TeX 渲染为 HTML；失败时回退为原始文本（不抛错）。 */
+function renderTex(tex: string, display: boolean): string {
+  try {
+    return katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: false,
+      strict: false,
+      output: 'html'
+    });
+  } catch {
+    return escapeHtml((display ? '$$' : '$') + tex + (display ? '$$' : '$'));
+  }
+}
+
+/** 单遍扫描：保护代码块/行内代码，把公式抽成占位符（避免 marked 破坏 _ * 等符号）。
+ * 所有围栏代码块（含 ```latex/math/tex）与行内代码内的 $ 一律不渲染，原样保留为代码。 */
+function extractMath(text: string, maths: MathSeg[]): string {
+  // 优先级：围栏代码块 > 行内代码 > $$块级 > \[块级\] > $行内 > \(行内\)
+  const re =
+    /(```[\s\S]*?```|~~~[\s\S]*?~~~)|(`[^`\n]*`)|(\$\$[\s\S]+?\$\$)|(\\\[[\s\S]+?\\\])|(\$[^\s$`][^$\n]*?[^\s$`]\$|\$[^\s$`]\$)|(\\\(.+?\\\))/g;
+  return text.replace(re, (m, fence, inlineCode, dispA, dispB, inlA, inlB) => {
+    if (fence !== undefined || inlineCode !== undefined) {
+      return m; // 代码原样保留，交给 marked
+    }
+    let tex = '';
+    let display = false;
+    if (dispA !== undefined) {
+      tex = dispA.slice(2, -2);
+      display = true;
+    } else if (dispB !== undefined) {
+      tex = dispB.slice(2, -2);
+      display = true;
+    } else if (inlA !== undefined) {
+      tex = inlA.slice(1, -1);
+      display = false;
+    } else if (inlB !== undefined) {
+      tex = inlB.slice(2, -2);
+      display = false;
+    } else {
+      return m;
+    }
+    maths.push({ tex: tex.trim(), display });
+    const ph = `@@CBHMATH${maths.length - 1}@@`;
+    return display ? `\n\n${ph}\n\n` : ph;
+  });
+}
+
 export function renderMarkdown(text: string): string {
   if (!text) {
     return '';
   }
   try {
-    const html = marked.parse(text) as string;
+    const maths: MathSeg[] = [];
+    const prepared = extractMath(text, maths);
+    let html = marked.parse(prepared) as string;
+    if (maths.length) {
+      // 还原占位符：块级连同外层 <p> 一起替换为 div，行内替换为 span
+      html = html.replace(/(<p>)?@@CBHMATH(\d+)@@(<\/p>)?/g, (m, _p, idx) => {
+        const seg = maths[Number(idx)];
+        if (!seg) {
+          return m;
+        }
+        const rendered = renderTex(seg.tex, seg.display);
+        return seg.display
+          ? `<div class="cbh-math-block">${rendered}</div>`
+          : `<span class="cbh-math-inline">${rendered}</span>`;
+      });
+    }
     return sanitizeHtml(html);
   } catch {
     return escapeHtml(text);
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Mermaid / ECharts 图表渲染（v0.2.13）
+//  流式中 ```mermaid / ```echarts 代码块按代码显示，回复完成或恢复历史时调用
+//  renderDiagrams 原地替换为 SVG / ECharts 图表。渲染失败一律保留代码块。
+//  动态 import 懒加载（webpack 代码分割），纯前端离线渲染，无 Python 依赖。
+// ---------------------------------------------------------------------------
+
+let _mermaidMod: any = null;
+let _mermaidLoading: Promise<any> | null = null;
+let _mermaidInited = false;
+let _diagSeq = 0;
+const _mermaidSvgCache = new Map<string, string>();
+
+async function getMermaid(): Promise<any | null> {
+  if (_mermaidMod) return _mermaidMod;
+  if (!_mermaidLoading) {
+    _mermaidLoading = import('mermaid')
+      .then(m => {
+        _mermaidMod = (m as any).default || m;
+        return _mermaidMod;
+      })
+      .catch(e => {
+        console.error('加载 mermaid 失败:', e);
+        return null;
+      });
+  }
+  return _mermaidLoading;
+}
+
+async function getEcharts(): Promise<any | null> {
+  try {
+    return await import('echarts');
+  } catch (e) {
+    console.error('加载 echarts 失败:', e);
+    return null;
+  }
+}
+
+/** 解析 echarts option：JSON 优先 → JS 求值兜底（函数/尾逗号）→ "option = {...}" 形式。 */
+function parseEchartsOption(src: string): any | null {
+  const s = String(src).trim().replace(/;+\s*$/, ''); // 去尾部多余分号
+  try {
+    return JSON.parse(s);
+  } catch {
+    /* 继续 */
+  }
+  try {
+    // eslint-disable-next-line no-new-func
+    return new Function('return (' + s + ')')();
+  } catch {
+    /* 继续 */
+  }
+  const m = s.match(/^(?:var|let|const)?\s*[A-Za-z_$][\w$]*\s*=\s*([\s\S]+)$/);
+  if (m) {
+    try {
+      // eslint-disable-next-line no-new-func
+      return new Function('return (' + m[1] + ')')();
+    } catch {
+      /* 忽略 */
+    }
+  }
+  return null;
+}
+
+/** 判断解析结果是否像 echarts option（含 series，echarts 的强特征）。 */
+function looksLikeEcharts(opt: any): boolean {
+  return (
+    !!opt &&
+    typeof opt === 'object' &&
+    !Array.isArray(opt) &&
+    'series' in opt &&
+    (Array.isArray(opt.series) || (opt.series && typeof opt.series === 'object'))
+  );
+}
+
+/** 收集 echarts 代码块：显式 echarts/echart 标签，或 json/javascript/js 标签且内容像 echarts option。 */
+function collectEchartsBlocks(container: HTMLElement): Array<{ pre: HTMLElement; src: string }> {
+  const blocks: Array<{ pre: HTMLElement; src: string }> = [];
+  container.querySelectorAll<HTMLElement>('pre code').forEach(code => {
+    const pre = code.closest('pre') as HTMLElement | null;
+    if (!pre || pre.dataset.diagDone) return;
+    const m = (code.className || '').match(/language-([\w+#-]+)/);
+    const lang = m ? m[1].toLowerCase() : '';
+    const src = (code.textContent || '').trim();
+    if (!src) return;
+    if (lang === 'echarts' || lang === 'echart') {
+      blocks.push({ pre, src });
+    } else if (lang === 'json' || lang === 'javascript' || lang === 'js') {
+      if (looksLikeEcharts(parseEchartsOption(src))) blocks.push({ pre, src });
+    }
+  });
+  return blocks;
+}
+
+/** mermaid 安全渲染：清理残留临时元素 + 失败重试一次，成功结果按源码缓存。 */
+async function renderMermaidSafe(mermaid: any, src: string): Promise<string> {
+  if (_mermaidSvgCache.has(src)) return _mermaidSvgCache.get(src) as string;
+  const id = 'cbh-mmd-' + ++_diagSeq;
+  let lastErr: any = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      document.getElementById(id)?.remove();
+      document.getElementById('d' + id)?.remove();
+      const out = await mermaid.render(id, src);
+      if (out && out.svg) {
+        _mermaidSvgCache.set(src, out.svg);
+        return out.svg;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('mermaid render 无输出');
+}
+
+/** 构建「图片 / 代码」切换包装器；onShowImg 在切回图片视图时回调（echarts 需 resize）。 */
+function buildDiagramWrap(
+  src: string,
+  onShowImg?: () => void
+): { wrap: HTMLElement; imgView: HTMLElement } {
+  const wrap = document.createElement('div');
+  wrap.className = 'cbh-diagram-wrap';
+
+  const btnImg = document.createElement('button');
+  btnImg.className = 'cbh-diagram-tab active';
+  btnImg.type = 'button';
+  btnImg.textContent = '图片';
+  const btnCode = document.createElement('button');
+  btnCode.className = 'cbh-diagram-tab';
+  btnCode.type = 'button';
+  btnCode.textContent = '代码';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'cbh-diagram-toolbar';
+  toolbar.appendChild(btnImg);
+  toolbar.appendChild(btnCode);
+
+  const imgView = document.createElement('div');
+  imgView.className = 'cbh-diagram-view cbh-diagram-img';
+  const codeView = document.createElement('div');
+  codeView.className = 'cbh-diagram-view cbh-diagram-code';
+  const codeEl = document.createElement('code');
+  codeEl.textContent = src;
+  const preEl = document.createElement('pre');
+  preEl.appendChild(codeEl);
+  preEl.appendChild(makeCopyBtn(src));
+  codeView.appendChild(preEl);
+  codeView.style.display = 'none';
+
+  wrap.appendChild(toolbar);
+  wrap.appendChild(imgView);
+  wrap.appendChild(codeView);
+
+  const show = (img: boolean): void => {
+    imgView.style.display = img ? '' : 'none';
+    codeView.style.display = img ? 'none' : '';
+    btnImg.classList.toggle('active', img);
+    btnCode.classList.toggle('active', !img);
+    if (img && onShowImg) {
+      try {
+        onShowImg();
+      } catch {
+        /* 忽略 */
+      }
+    }
+  };
+  btnImg.addEventListener('click', () => show(true));
+  btnCode.addEventListener('click', () => show(false));
+  return { wrap, imgView };
+}
+
+export async function renderDiagrams(container: HTMLElement): Promise<void> {
+  if (!container) return;
+
+  // ---- mermaid ----
+  const mmdBlocks: Array<{ pre: HTMLElement; src: string }> = [];
+  container.querySelectorAll<HTMLElement>('pre code.language-mermaid').forEach(code => {
+    const pre = code.closest('pre') as HTMLElement | null;
+    if (!pre || pre.dataset.diagDone) return;
+    const src = (code.textContent || '').trim();
+    if (src) mmdBlocks.push({ pre, src });
+  });
+  if (mmdBlocks.length) {
+    const mermaid = await getMermaid();
+    if (mermaid) {
+      if (!_mermaidInited) {
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'dark',
+            securityLevel: 'strict', // 内置 DOMPurify 消毒，防 XSS
+            logLevel: 'fatal'
+          });
+          _mermaidInited = true;
+        } catch (e) {
+          console.error('mermaid initialize 失败:', e);
+        }
+      }
+      for (const { pre, src } of mmdBlocks) {
+        if (!pre.isConnected) continue;
+        pre.dataset.diagDone = '1';
+        try {
+          const svg = await renderMermaidSafe(mermaid, src);
+          const { wrap, imgView } = buildDiagramWrap(src);
+          imgView.classList.add('cbh-mermaid');
+          imgView.innerHTML = svg;
+          pre.replaceWith(wrap);
+        } catch (e) {
+          console.warn('mermaid 渲染失败，保留代码块:', e);
+        }
+      }
+    }
+  }
+
+  // ---- echarts ----
+  const ecBlocks = collectEchartsBlocks(container);
+  if (ecBlocks.length) {
+    const echarts = await getEcharts();
+    if (echarts) {
+      for (const { pre, src } of ecBlocks) {
+        if (!pre.isConnected) continue;
+        pre.dataset.diagDone = '1';
+        const option = parseEchartsOption(src);
+        if (!looksLikeEcharts(option)) {
+          console.warn('echarts option 解析失败，保留代码块');
+          continue;
+        }
+        try {
+          let chart: any = null;
+          const { wrap, imgView } = buildDiagramWrap(src, () => {
+            if (chart) chart.resize();
+          });
+          const box = document.createElement('div');
+          box.className = 'cbh-echarts';
+          imgView.appendChild(box);
+          pre.replaceWith(wrap);
+          chart = echarts.init(box, 'dark');
+          chart.setOption(option);
+          if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(() => {
+              try {
+                chart.resize();
+              } catch {
+                /* 忽略 */
+              }
+            });
+            ro.observe(box);
+          }
+        } catch (e) {
+          console.warn('echarts 渲染失败:', e);
+        }
+      }
+    }
   }
 }
 
