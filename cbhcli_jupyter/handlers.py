@@ -86,6 +86,14 @@ from cbhcli_pkg.web.server import (
     # Agent 链条（list 复用端点函数；use/off 需自定义 handler 操作会话）
     list_chains,
     _get_chain_manager,
+    # 知识库管理（复用 cbhcli web 端点函数，v0.2.15）
+    list_knowledge,
+    add_knowledge_file,
+    remove_knowledge_file,
+    reindex_knowledge,
+    embedding_status,
+    embedding_index,
+    KnowledgeAdd,
 )
 from cbhcli_pkg.core.session_history import SessionHistoryManager
 from cbhcli_pkg.tools.python_tool import remove_python_session
@@ -137,15 +145,30 @@ def _handle_error(handler: tornado.web.RequestHandler, e: Exception):
         _send_json(handler, {"error": f"{type(e).__name__}: {e}"})
 
 
-def api_handler(fn, *, model_cls=None, body_arg="body", path_args=()):
-    """工厂：根据 cbhcli web 端点函数生成 tornado handler 类。
+def spec(fn, *, model_cls=None, body_arg="body", path_args=()):
+    """单个端点规格（供 api_handler 使用）。"""
+    return {"fn": fn, "model_cls": model_cls, "body_arg": body_arg, "path_args": path_args}
 
-    fn: 端点函数（同步或异步）
-    model_cls: 可选 pydantic 模型，请求体解析为该模型实例后传给 body_arg
-    path_args: 从 URL 路径捕获的参数名列表（tornado path_kwargs）
+
+def api_handler(methods):
+    """工厂：按 HTTP 方法分发到 cbhcli web 端点函数。
+
+    methods: dict，键为小写方法名（get/post/put/delete），值为 spec() 返回的规格。
+
+    ⚠️ tornado 同一 URL 只会有一个 handler 生效（按注册顺序取第一个，不按方法分发），
+    因此同一 URL 的多个方法必须合并进同一个 handler 内按方法分发。
+    （v0.2.15 修复：旧版对同 URL 注册多个 api_handler，导致 POST/PUT/DELETE 全部
+    打到第一个 GET handler 上，添加模型/MCP/知识库等写操作全部失败。）
     """
     class _ApiHandler(tornado.web.RequestHandler):
-        async def _run(self):
+        async def _run(self, method):
+            sp = methods.get(method)
+            if sp is None:
+                raise tornado.web.HTTPError(405, "方法不允许")
+            fn = sp["fn"]
+            model_cls = sp.get("model_cls")
+            body_arg = sp.get("body_arg", "body")
+            path_args = sp.get("path_args", ())
             try:
                 kwargs = {}
                 for name in path_args:
@@ -155,7 +178,12 @@ def api_handler(fn, *, model_cls=None, body_arg="body", path_args=()):
                     kwargs[body_arg] = model_cls(**body)
                 elif body:
                     kwargs[body_arg] = body
-                result = fn(**kwargs)
+                # 同步端点放到线程执行，避免阻塞 tornado 事件循环
+                # （如 MCP 连接/刷新等网络操作，未达服务器会阻塞数十秒，v0.2.15）
+                if inspect.iscoroutinefunction(fn):
+                    result = await fn(**kwargs)
+                else:
+                    result = await asyncio.to_thread(fn, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 _send_json(self, result if result is not None else {"message": "ok"})
@@ -163,16 +191,16 @@ def api_handler(fn, *, model_cls=None, body_arg="body", path_args=()):
                 _handle_error(self, e)
 
         async def get(self, *args, **kwargs):
-            await self._run()
+            await self._run("get")
 
         async def post(self, *args, **kwargs):
-            await self._run()
+            await self._run("post")
 
         async def put(self, *args, **kwargs):
-            await self._run()
+            await self._run("put")
 
         async def delete(self, *args, **kwargs):
-            await self._run()
+            await self._run("delete")
 
     return _ApiHandler
 
@@ -188,7 +216,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.2.14",
+            "version": "0.2.15",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -765,69 +793,99 @@ handlers = [
     (rf"{PREFIX}/notebook/active", NotebookActiveHandler),
 
     # --- 配置 ---
-    (rf"{PREFIX}/config", api_handler(get_settings)),
-    (rf"{PREFIX}/config", api_handler(update_settings, model_cls=SettingsUpdate, body_arg="update")),
+    (rf"{PREFIX}/config", api_handler({
+        "get": spec(get_settings),
+        "put": spec(update_settings, model_cls=SettingsUpdate, body_arg="update"),
+    })),
 
     # --- 模型管理 ---
-    (rf"{PREFIX}/models", api_handler(list_models)),
-    (rf"{PREFIX}/models", api_handler(add_model, model_cls=ModelConfig, body_arg="model")),
-    (rf"{PREFIX}/models/select", api_handler(select_model, path_args=("model_name",))),
-    (rf"{PREFIX}/models/embedding", api_handler(update_embedding_model, model_cls=EmbeddingModelConfig, body_arg="model")),
-    (rf"{PREFIX}/models/embedding", api_handler(delete_embedding_model)),
-    (rf"{PREFIX}/models/rerank", api_handler(update_rerank_model, model_cls=RerankModelConfig, body_arg="model")),
-    (rf"{PREFIX}/models/rerank", api_handler(delete_rerank_model)),
-    (rf"{PREFIX}/models/(?P<model_name>[^/]+)", api_handler(update_model, model_cls=ModelConfig, body_arg="model", path_args=("model_name",))),
-    (rf"{PREFIX}/models/(?P<model_name>[^/]+)", api_handler(delete_model, path_args=("model_name",))),
+    (rf"{PREFIX}/models", api_handler({
+        "get": spec(list_models),
+        "post": spec(add_model, model_cls=ModelConfig, body_arg="model"),
+    })),
+    (rf"{PREFIX}/models/embedding", api_handler({
+        "put": spec(update_embedding_model, model_cls=EmbeddingModelConfig, body_arg="model"),
+        "delete": spec(delete_embedding_model),
+    })),
+    (rf"{PREFIX}/models/rerank", api_handler({
+        "put": spec(update_rerank_model, model_cls=RerankModelConfig, body_arg="model"),
+        "delete": spec(delete_rerank_model),
+    })),
+    (rf"{PREFIX}/models/(?P<model_name>[^/]+)", api_handler({
+        "put": spec(update_model, model_cls=ModelConfig, body_arg="model", path_args=("model_name",)),
+        "delete": spec(delete_model, path_args=("model_name",)),
+    })),
 
     # --- 备用模型 ---
-    (rf"{PREFIX}/fallback", api_handler(get_fallback)),
-    (rf"{PREFIX}/fallback", api_handler(add_fallback, model_cls=FallbackAdd, body_arg="body")),
-    (rf"{PREFIX}/fallback/clear/(?P<category>[^/]+)", api_handler(clear_fallback, path_args=("category",))),
-    (rf"{PREFIX}/fallback/reorder/(?P<category>[^/]+)", api_handler(reorder_fallback, model_cls=FallbackReorder, body_arg="body", path_args=("category",))),
-    (rf"{PREFIX}/fallback/(?P<category>[^/]+)/(?P<model_name>[^/]+)", api_handler(remove_fallback, path_args=("category", "model_name"))),
+    (rf"{PREFIX}/fallback", api_handler({
+        "get": spec(get_fallback),
+        "post": spec(add_fallback, model_cls=FallbackAdd, body_arg="body"),
+    })),
+    (rf"{PREFIX}/fallback/clear/(?P<category>[^/]+)", api_handler({"delete": spec(clear_fallback, path_args=("category",))})),
+    (rf"{PREFIX}/fallback/reorder/(?P<category>[^/]+)", api_handler({"put": spec(reorder_fallback, model_cls=FallbackReorder, body_arg="body", path_args=("category",))})),
+    (rf"{PREFIX}/fallback/(?P<category>[^/]+)/(?P<model_name>[^/]+)", api_handler({"delete": spec(remove_fallback, path_args=("category", "model_name"))})),
 
     # --- 权限 / 钩子 / 撤销 ---
-    (rf"{PREFIX}/permissions", api_handler(get_permissions)),
-    (rf"{PREFIX}/permissions/mode", api_handler(set_permission_mode, model_cls=ModeUpdate, body_arg="body")),
-    (rf"{PREFIX}/permissions/rule", api_handler(update_permission_rule, model_cls=PermissionRuleUpdate, body_arg="body")),
-    (rf"{PREFIX}/hooks/(?P<agent_name>[^/]+)", api_handler(get_hooks, path_args=("agent_name",))),
-    (rf"{PREFIX}/hooks/reload/(?P<agent_name>[^/]+)", api_handler(reload_hooks, path_args=("agent_name",))),
-    (rf"{PREFIX}/backups/(?P<agent_name>[^/]+)", api_handler(list_backups, path_args=("agent_name",))),
-    (rf"{PREFIX}/undo/(?P<agent_name>[^/]+)", api_handler(undo_backup, model_cls=UndoRequest, body_arg="body", path_args=("agent_name",))),
+    (rf"{PREFIX}/permissions", api_handler({"get": spec(get_permissions)})),
+    (rf"{PREFIX}/permissions/mode", api_handler({"post": spec(set_permission_mode, model_cls=ModeUpdate, body_arg="body")})),
+    (rf"{PREFIX}/permissions/rule", api_handler({"post": spec(update_permission_rule, model_cls=PermissionRuleUpdate, body_arg="body")})),
+    (rf"{PREFIX}/hooks/(?P<agent_name>[^/]+)", api_handler({"get": spec(get_hooks, path_args=("agent_name",))})),
+    (rf"{PREFIX}/hooks/reload/(?P<agent_name>[^/]+)", api_handler({"post": spec(reload_hooks, path_args=("agent_name",))})),
+    (rf"{PREFIX}/backups/(?P<agent_name>[^/]+)", api_handler({"get": spec(list_backups, path_args=("agent_name",))})),
+    (rf"{PREFIX}/undo/(?P<agent_name>[^/]+)", api_handler({"post": spec(undo_backup, model_cls=UndoRequest, body_arg="body", path_args=("agent_name",))})),
 
     # --- Agent 管理 ---
-    (rf"{PREFIX}/agents", api_handler(list_agents)),
-    (rf"{PREFIX}/agents", api_handler(create_agent, model_cls=AgentCreate, body_arg="agent")),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)", api_handler(get_agent, path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)", api_handler(update_agent, model_cls=AgentUpdate, body_arg="update", path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)", api_handler(delete_agent, path_args=("agent_name",))),
+    (rf"{PREFIX}/agents", api_handler({
+        "get": spec(list_agents),
+        "post": spec(create_agent, model_cls=AgentCreate, body_arg="agent"),
+    })),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)", api_handler({
+        "get": spec(get_agent, path_args=("agent_name",)),
+        "put": spec(update_agent, model_cls=AgentUpdate, body_arg="update", path_args=("agent_name",)),
+        "delete": spec(delete_agent, path_args=("agent_name",)),
+    })),
 
     # --- 历史会话 ---
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history", api_handler(list_history, path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history/(?P<filename>[^/]+)", api_handler(get_history, path_args=("agent_name", "filename"))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history/(?P<filename>[^/]+)", api_handler(delete_history, path_args=("agent_name", "filename"))),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history", api_handler({"get": spec(list_history, path_args=("agent_name",))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history/(?P<filename>[^/]+)", api_handler({
+        "get": spec(get_history, path_args=("agent_name", "filename")),
+        "delete": spec(delete_history, path_args=("agent_name", "filename")),
+    })),
     (rf"{PREFIX}/chat/load", ChatLoadHandler),
 
     # --- 工具管理（勾选启用/禁用） ---
     # GET 用自定义 handler：内置工具 + notebook 工具（category="Notebook 工具"）
     (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools", AgentToolsHandler),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools/(?P<tool_name>[^/]+)", api_handler(toggle_tool, model_cls=Toggle, body_arg="body", path_args=("agent_name", "tool_name"))),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/tools/(?P<tool_name>[^/]+)", api_handler({"put": spec(toggle_tool, model_cls=Toggle, body_arg="body", path_args=("agent_name", "tool_name"))})),
 
     # --- 技能管理（勾选激活/停用） ---
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills", api_handler(list_skills, path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills/activate", api_handler(activate_skills, model_cls=SkillActivate, body_arg="body", path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills/(?P<skill_name>[^/]+)/deactivate", api_handler(deactivate_skill, path_args=("agent_name", "skill_name"))),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills", api_handler({"get": spec(list_skills, path_args=("agent_name",))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills/activate", api_handler({"post": spec(activate_skills, model_cls=SkillActivate, body_arg="body", path_args=("agent_name",))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/skills/(?P<skill_name>[^/]+)/deactivate", api_handler({"post": spec(deactivate_skill, path_args=("agent_name", "skill_name"))})),
 
     # --- MCP 管理（服务器增删刷新 + 工具开关） ---
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp", api_handler(list_mcp_servers, path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp", api_handler(add_mcp_server, model_cls=MCPServerAdd, body_arg="body", path_args=("agent_name",))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/refresh", api_handler(refresh_mcp_server, path_args=("agent_name", "server_name"))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/tools", api_handler(list_mcp_server_tools, path_args=("agent_name", "server_name"))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/tools/(?P<tool_name>[^/]+)", api_handler(toggle_mcp_tool, model_cls=Toggle, body_arg="body", path_args=("agent_name", "server_name", "tool_name"))),
-    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)", api_handler(remove_mcp_server, path_args=("agent_name", "server_name"))),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp", api_handler({
+        "get": spec(list_mcp_servers, path_args=("agent_name",)),
+        "post": spec(add_mcp_server, model_cls=MCPServerAdd, body_arg="body", path_args=("agent_name",)),
+    })),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/refresh", api_handler({"post": spec(refresh_mcp_server, path_args=("agent_name", "server_name"))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/tools", api_handler({"get": spec(list_mcp_server_tools, path_args=("agent_name", "server_name"))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)/tools/(?P<tool_name>[^/]+)", api_handler({"put": spec(toggle_mcp_tool, model_cls=Toggle, body_arg="body", path_args=("agent_name", "server_name", "tool_name"))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/mcp/(?P<server_name>[^/]+)", api_handler({"delete": spec(remove_mcp_server, path_args=("agent_name", "server_name"))})),
+
+    # --- 知识库管理（列表/添加/删除/重建索引 + 向量状态，v0.2.15） ---
+    # 注意：/knowledge/reindex 必须在 /knowledge/{file_name} 之前注册（否则被后者截获）
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/knowledge", api_handler({
+        "get": spec(list_knowledge, path_args=("agent_name",)),
+        "post": spec(add_knowledge_file, model_cls=KnowledgeAdd, body_arg="body", path_args=("agent_name",)),
+    })),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/knowledge/reindex", api_handler({"post": spec(reindex_knowledge, path_args=("agent_name",))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/knowledge/(?P<file_name>[^/]+)", api_handler({"delete": spec(remove_knowledge_file, path_args=("agent_name", "file_name"))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/embedding/status", api_handler({"get": spec(embedding_status, path_args=("agent_name",))})),
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/embedding/index", api_handler({"post": spec(embedding_index, path_args=("agent_name",))})),
 
     # --- Agent 链条（列出 + 为当前会话激活/取消） ---
-    (rf"{PREFIX}/chains", api_handler(list_chains)),
+    (rf"{PREFIX}/chains", api_handler({"get": spec(list_chains)})),
     (rf"{PREFIX}/chat/use-chain", ChainUseHandler),
     (rf"{PREFIX}/chat/off-chain", ChainOffHandler),
 ]

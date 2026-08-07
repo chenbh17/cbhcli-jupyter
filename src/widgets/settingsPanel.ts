@@ -64,8 +64,8 @@ function el(tag: string, attrs: Record<string, any> = {}, ...children: any[]): H
 
 export class SettingsPanel extends Widget {
   private _root!: HTMLElement;
-  /** 历史会话折叠状态（true=收起只显示标题行）。跨 refresh 保留。 */
-  private _historyCollapsed = false;
+  /** 各分区折叠状态（key -> true=收起）。跨 refresh 保留（v0.2.15 通用折叠）。 */
+  private _collapsed: { [key: string]: boolean } = {};
 
   constructor(private _ctx: SettingsCtx) {
     super();
@@ -81,10 +81,12 @@ export class SettingsPanel extends Widget {
     this._root.appendChild(await this._buildModelsSection());
     // 备用模型
     this._root.appendChild(await this._buildFallbackSection());
-    // MCP 服务器（实用级：列表+工具开关+刷新/删除+添加）
+    // MCP 服务器（列表+工具开关+刷新/删除+添加）
     this._root.appendChild(await this._buildMcpSection());
-    // Agent 链条（实用级：列表+树+激活/取消）
+    // Agent 链条（列表+树+激活/取消）
     this._root.appendChild(await this._buildChainSection());
+    // 知识库（v0.2.15 新增：列表+添加+删除+重建索引+向量状态）
+    this._root.appendChild(await this._buildKnowledgeSection());
     // 权限模式
     this._root.appendChild(await this._buildPermissionsSection());
     // 历史会话
@@ -96,7 +98,7 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildModelsSection(): Promise<HTMLElement> {
-    const group = this._section('🧠 模型管理');
+    const group = this._section('🧠 模型管理', undefined, 'models');
     let models: ModelInfo[] = [];
     try {
       const data = await apiGet<{ models?: ModelInfo[] }>('models');
@@ -153,7 +155,7 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildFallbackSection(): Promise<HTMLElement> {
-    const group = this._section('🔁 备用模型', '主模型异常时按顺序自动切换；视觉模型同理（image 工具）');
+    const group = this._section('🔁 备用模型', '主模型异常时按顺序自动切换；视觉模型同理（image 工具）', 'fallback');
     let data: any = { main: [], vision: [], available_models: [] };
     try {
       data = await apiGet('fallback');
@@ -281,7 +283,7 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildPermissionsSection(): Promise<HTMLElement> {
-    const group = this._section('🛡️ 权限模式', '控制工具调用的确认策略');
+    const group = this._section('🛡️ 权限模式', '控制工具调用的确认策略', 'permissions');
     let perms: any = { mode: 'standard', modes: [], rules: {} };
     try {
       perms = await apiGet('permissions');
@@ -341,7 +343,6 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildHistorySection(): Promise<HTMLElement> {
-    const group = el('div', { class: 'cbhcli-settings-group' });
     const agent = this._ctx.getAgent();
     let sessions: any[] = [];
     try {
@@ -350,14 +351,8 @@ export class SettingsPanel extends Widget {
     } catch {
       sessions = [];
     }
-
-    // 可折叠头部：点击标题行展开/收起整个列表（v0.2.9）
-    const head = el('div', { class: 'cbhcli-history-head' });
-    const chevron = el('span', { class: 'cbhcli-history-chevron' }, this._historyCollapsed ? '▸' : '▾');
-    head.appendChild(chevron);
-    head.appendChild(el('div', { class: 'cbhcli-settings-title' }, `🕘 历史会话（${sessions.length}）`));
-    group.appendChild(head);
-
+    // 通用折叠（v0.2.15）
+    const group = this._section(`🕘 历史会话（${sessions.length}）`, undefined, 'history');
     const list = el('div', { class: 'cbhcli-history-list' });
     if (sessions.length === 0) {
       list.appendChild(el('div', { class: 'cbhcli-empty' }, '暂无历史会话'));
@@ -367,15 +362,6 @@ export class SettingsPanel extends Widget {
         list.appendChild(this._historyItem(s));
       }
     }
-    if (this._historyCollapsed) {
-      list.classList.add('collapsed');
-    }
-    head.addEventListener('click', () => {
-      this._historyCollapsed = !this._historyCollapsed;
-      list.classList.toggle('collapsed', this._historyCollapsed);
-      chevron.textContent = this._historyCollapsed ? '▸' : '▾';
-    });
-
     group.appendChild(list);
     return group;
   }
@@ -447,7 +433,12 @@ export class SettingsPanel extends Widget {
 
   private async _selectModel(name: string): Promise<void> {
     try {
-      await apiPost('models/select', { model_name: name });
+      // 原地切换模型（保留会话），与顶栏模型下拉一致（v0.2.15 修复 models/select 参数不匹配）
+      await apiPost('chat/switch_model', {
+        agent_name: this._ctx.getAgent(),
+        old_model: this._ctx.getModel(),
+        new_model: name
+      });
       this._ctx.notify();
       this.refresh();
     } catch (err) {
@@ -583,7 +574,7 @@ export class SettingsPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _buildMcpSection(): Promise<HTMLElement> {
-    const group = this._section('🔌 MCP 服务器', '外部工具服务器（Model Context Protocol）');
+    const group = this._section('🔌 MCP 服务器', '外部工具服务器（Model Context Protocol）', 'mcp');
     const agent = encodeURIComponent(this._ctx.getAgent());
     let servers: any[] = [];
     try {
@@ -697,11 +688,117 @@ export class SettingsPanel extends Widget {
   }
 
   // ------------------------------------------------------------------
+  //  知识库（v0.2.15 新增：列表 + 添加 + 删除 + 重建索引 + 向量状态）
+  // ------------------------------------------------------------------
+
+  private async _buildKnowledgeSection(): Promise<HTMLElement> {
+    const agent = encodeURIComponent(this._ctx.getAgent());
+    const group = this._section('📚 知识库', '添加文档建立向量索引，供 knowledge_base 工具检索', 'knowledge');
+
+    let files: any[] = [];
+    let vectorEnabled = false;
+    try {
+      const data = await apiGet<{ files?: any[]; vector_enabled?: boolean }>(`agents/${agent}/knowledge`);
+      files = data?.files || [];
+      vectorEnabled = !!data?.vector_enabled;
+    } catch {
+      files = [];
+    }
+
+    // 向量状态
+    group.appendChild(
+      el('div', { class: 'cbhcli-kb-status' + (vectorEnabled ? ' on' : '') },
+        vectorEnabled ? '🟢 向量索引已启用' : '⚪ 向量未启用（请先在 CLI/web 配置嵌入模型）')
+    );
+
+    // 操作按钮
+    const actions = el('div', { class: 'cbhcli-model-actions' });
+    actions.appendChild(el('button', {
+      class: 'cbhcli-btn cbhcli-btn-small',
+      onclick: () => this._addKnowledgeDialog(agent)
+    }, '✚ 添加文件'));
+    actions.appendChild(el('button', {
+      class: 'cbhcli-btn cbhcli-btn-small',
+      onclick: async () => {
+        try {
+          const r = await apiPost<{ message?: string }>(`agents/${agent}/knowledge/reindex`);
+          alert(r?.message || '已重建索引');
+          void this.refresh();
+        } catch (e) {
+          alert(`重建索引失败: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }, '🔄 重建索引'));
+    group.appendChild(actions);
+
+    // 文件列表
+    if (files.length === 0) {
+      group.appendChild(el('div', { class: 'cbhcli-empty' }, '暂无知识库文件'));
+      return group;
+    }
+    for (const f of files) {
+      const name = typeof f === 'string' ? f : (f.name || '');
+      const size = typeof f === 'object' && f.size != null ? this._fmtSize(f.size) : '';
+      const item = el('div', { class: 'cbhcli-kb-item' });
+      const nameEl = el('span', { class: 'cbhcli-kb-name' }, `📄 ${name}${size ? '（' + size + '）' : ''}`);
+      nameEl.title = (typeof f === 'object' && f.path) || name;
+      item.appendChild(nameEl);
+      item.appendChild(el('button', {
+        class: 'cbhcli-btn cbhcli-btn-small cbhcli-btn-danger',
+        onclick: async () => {
+          if (!confirm(`从知识库删除 '${name}'？`)) {
+            return;
+          }
+          try {
+            await apiDelete(`agents/${agent}/knowledge/${encodeURIComponent(name)}`);
+            void this.refresh();
+          } catch (e) {
+            alert(`删除失败: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+      }, '删除'));
+      group.appendChild(item);
+    }
+    return group;
+  }
+
+  /** 字节数 → 可读大小。 */
+  private _fmtSize(n: number): string {
+    if (n < 1024) {
+      return `${n} B`;
+    }
+    if (n < 1024 * 1024) {
+      return `${(n / 1024).toFixed(1)} KB`;
+    }
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  private _addKnowledgeDialog(agent: string): void {
+    const pathInput = el('input', {
+      class: 'cbhcli-input',
+      placeholder: '文件绝对路径（如 /home/.../doc.md）'
+    }) as HTMLInputElement;
+    const body = el('div', { class: 'cbhcli-form' });
+    body.appendChild(el('div', { class: 'cbhcli-form-label' }, '文件路径'));
+    body.appendChild(pathInput);
+    body.appendChild(el('div', { class: 'cbhcli-settings-desc' }, '支持 md/txt/pdf 等；文件将复制到知识库并建立向量索引'));
+    this._showDialog('✚ 添加知识库文件', body, async () => {
+      const filePath = pathInput.value.trim();
+      if (!filePath) {
+        throw new Error('文件路径不能为空');
+      }
+      await apiPost(`agents/${agent}/knowledge`, { file_path: filePath });
+      this._ctx.notify();
+      void this.refresh();
+    });
+  }
+
+  // ------------------------------------------------------------------
   //  Agent 链条（实用级：列表 + 树 + 激活/取消）
   // ------------------------------------------------------------------
 
   private async _buildChainSection(): Promise<HTMLElement> {
-    const group = this._section('🔗 Agent 链条', '多 Agent 调用编排（新建/编辑请用 CLI /chain 或 web）');
+    const group = this._section('🔗 Agent 链条', '多 Agent 调用编排（新建/编辑请用 CLI /chain 或 web）', 'chains');
     const agentName = this._ctx.getAgent();
     const modelName = this._ctx.getModel();
     let chains: any[] = [];
@@ -789,11 +886,32 @@ export class SettingsPanel extends Widget {
   //  通用
   // ------------------------------------------------------------------
 
-  private _section(title: string, desc?: string): HTMLElement {
-    const group = el('div', { class: 'cbhcli-settings-group' });
-    group.appendChild(el('div', { class: 'cbhcli-settings-title' }, title));
+  /** 分区容器；传 key 则可折叠（点击标题行收起/展开，状态跨 refresh 保留，v0.2.15）。 */
+  private _section(title: string, desc?: string, key?: string): HTMLElement {
+    const group = el('div', { class: 'cbhcli-settings-group' + (key ? ' collapsible' : '') });
+    const head = el('div', { class: 'cbhcli-section-head' });
+    let chevron: HTMLElement | null = null;
+    if (key) {
+      const collapsed = !!this._collapsed[key];
+      if (collapsed) {
+        group.classList.add('collapsed');
+      }
+      chevron = el('span', { class: 'cbhcli-section-chevron' }, collapsed ? '▸' : '▾');
+      head.appendChild(chevron);
+    }
+    head.appendChild(el('div', { class: 'cbhcli-settings-title' }, title));
+    group.appendChild(head);
     if (desc) {
       group.appendChild(el('div', { class: 'cbhcli-settings-desc' }, desc));
+    }
+    if (key) {
+      head.addEventListener('click', () => {
+        this._collapsed[key] = !this._collapsed[key];
+        group.classList.toggle('collapsed', this._collapsed[key]);
+        if (chevron) {
+          chevron.textContent = this._collapsed[key] ? '▸' : '▾';
+        }
+      });
     }
     return group;
   }

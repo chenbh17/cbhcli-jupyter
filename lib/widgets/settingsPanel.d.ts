@@ -13,8 +13,8 @@ interface SettingsCtx {
 export declare class SettingsPanel extends Widget {
     private _ctx;
     private _root;
-    /** 历史会话折叠状态（true=收起只显示标题行）。跨 refresh 保留。 */
-    private _historyCollapsed;
+    /** 各分区折叠状态（key -> true=收起）。跨 refresh 保留（v0.2.15 通用折叠）。 */
+    private _collapsed;
     constructor(_ctx: SettingsCtx);
     refresh(): Promise<void>;
     private _buildModelsSection;
@@ -41,7 +41,12 @@ export declare class SettingsPanel extends Widget {
     private _collectForm;
     private _buildMcpSection;
     private _addMcpServerDialog;
+    private _buildKnowledgeSection;
+    /** 字节数 → 可读大小。 */
+    private _fmtSize;
+    private _addKnowledgeDialog;
     private _buildChainSection;
+    /** 分区容器；传 key 则可折叠（点击标题行收起/展开，状态跨 refresh 保留，v0.2.15）。 */
     private _section;
     private _showDialog;
 }

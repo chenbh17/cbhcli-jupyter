@@ -647,6 +647,60 @@
   margin-top: -4px;
 }
 
+/* 分区可折叠（v0.2.15）：点击标题行收起/展开 */
+.cbhcli-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.cbhcli-settings-group:not(.collapsible) .cbhcli-section-head {
+  cursor: default;
+}
+.cbhcli-section-head:hover .cbhcli-section-chevron {
+  color: #79c0ff;
+}
+.cbhcli-section-chevron {
+  color: #8b949e;
+  font-size: 12px;
+  width: 12px;
+  flex: 0 0 auto;
+  transition: color 0.15s;
+}
+/* 收起时隐藏标题行之外的所有子元素 */
+.cbhcli-settings-group.collapsed > *:not(.cbhcli-section-head) {
+  display: none;
+}
+
+/* 知识库（v0.2.15） */
+.cbhcli-kb-status {
+  color: #8b949e;
+  font-size: 12px;
+}
+.cbhcli-kb-status.on {
+  color: #3fb950;
+}
+.cbhcli-kb-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #21262d;
+  border-radius: 5px;
+  background: #0d1117;
+}
+.cbhcli-kb-name {
+  color: #e6edf3;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cbhcli-settings-row {
   display: flex;
   align-items: center;

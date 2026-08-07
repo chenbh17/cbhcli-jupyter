@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cbhcli_jupyter"
-version = "0.2.14"
+version = "0.2.15"
 description = "基于 cbhcli 的 JupyterLab AI 助手插件：侧边栏问答面板 + notebook 代码操作工具"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
