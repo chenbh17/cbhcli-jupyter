@@ -52,6 +52,7 @@ from cbhcli_pkg.web.server import (
     get_agent,
     update_agent,
     delete_agent,
+    select_agent,
     list_history,
     get_history,
     delete_history,
@@ -132,17 +133,21 @@ def _send_json(handler: tornado.web.RequestHandler, data, status: int = 200):
 
 
 def _handle_error(handler: tornado.web.RequestHandler, e: Exception):
-    """统一异常转换（fastapi HTTPException → tornado）。"""
+    """统一异常转换（fastapi HTTPException → tornado）。
+
+    v0.3.1 修复：错误响应必须带正确的 HTTP 状态码。旧版先 set_status(4xx/5xx)
+    再调 _send_json()，而 _send_json 默认参数会把状态码重置回 200 →
+    所有 API 错误（如模型编辑字段校验失败）都以 200 返回，前端 response.ok=true
+    把 {"error": ...} 当成功处理，用户看不到任何报错（"编辑不生效"的帮凶）。
+    """
     if isinstance(e, HTTPException):
-        handler.set_status(e.status_code or 400)
-        _send_json(handler, {"error": getattr(e, "detail", str(e))})
+        _send_json(handler, {"error": getattr(e, "detail", str(e))},
+                   status=e.status_code or 400)
     elif isinstance(e, tornado.web.HTTPError):
-        handler.set_status(e.status_code)
-        _send_json(handler, {"error": e.reason or str(e)})
+        _send_json(handler, {"error": e.reason or str(e)}, status=e.status_code)
     else:
         logger.exception("cbhcli_jupyter API 错误")
-        handler.set_status(500)
-        _send_json(handler, {"error": f"{type(e).__name__}: {e}"})
+        _send_json(handler, {"error": f"{type(e).__name__}: {e}"}, status=500)
 
 
 def spec(fn, *, model_cls=None, body_arg="body", path_args=()):
@@ -216,7 +221,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.2.15",
+            "version": "0.3.1",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -363,7 +368,16 @@ class ChatHandler(tornado.web.RequestHandler):
             raise tornado.web.HTTPError(e.status_code or 400, getattr(e, "detail", str(e)))
 
         if cs.lock.locked():
-            raise tornado.web.HTTPError(409, "该会话正在处理中，请等待完成或先中断")
+            # v0.3.1：中断（abort）后上一请求可能仍在收尾——工具执行不可被立即打断，
+            # _react_loop 要到下一个检查点才退出释放锁。此时立即 409 会让用户
+            # "中断后再发消息"报 conflict。改为短暂等待锁释放（最多 30 秒），
+            # 仍不释放才报 409。
+            for _ in range(60):
+                await asyncio.sleep(0.5)
+                if not cs.lock.locked():
+                    break
+            if cs.lock.locked():
+                raise tornado.web.HTTPError(409, "该会话正在处理中，请等待完成或先中断")
 
         # 小眼睛严格模式：前端随消息带上 nb_enabled（= 是否注入了选区上下文）。
         # 仅当注入了选区上下文时启用 nb 工具，否则禁用 → agent 只做普通问答+非 nb 工具。
@@ -583,13 +597,18 @@ class ChatLoadHandler(tornado.web.RequestHandler):
             except Exception:
                 pass
         # 全新会话（含全部组件），再注入历史消息
+        # v0.3.0：跳过 system 消息（保留新建系统提示），但保留上下文压缩生成的
+        # "历史对话摘要"——摘要是 agent 对早期对话的记忆，丢弃它会导致恢复
+        # 压缩过的会话后 agent 失忆（对齐 cbhcli v5.2.3 chat_load 修复）
+        from cbhcli_pkg.context.compressor import SUMMARY_MARKER
         cs = WebChatSession.create(agent_name, model_name)
         for msg in hist_messages:
             role = msg.get("role", "")
-            if role == "system":
+            content = msg.get("content", "") or ""
+            if role == "system" and not content.startswith(SUMMARY_MARKER):
                 continue
             cs.session.add_message(
-                role, msg.get("content", "") or "",
+                role, content,
                 tool_call_id=msg.get("tool_call_id"),
                 tool_calls=msg.get("tool_calls"),
                 reasoning_content=msg.get("reasoning_content"),
@@ -610,7 +629,8 @@ class ChatCompressHandler(tornado.web.RequestHandler):
         body = _parse_body(self)
         agent_name = body.get("agent_name", "") or "main"
         model_name = body.get("model_name", "")
-        instruction = body.get("instruction", "")
+        # v0.3.0：兼容 instructions（复数，cbhcli web 约定）与 instruction（单数，旧字段）
+        instruction = body.get("instructions") or body.get("instruction") or ""
         cs = chat_api.get_session(agent_name, model_name)
         if not cs or not cs.context_compressor or not cs.context_window:
             raise tornado.web.HTTPError(404, "会话不存在或压缩组件未初始化")
@@ -768,6 +788,48 @@ class AgentToolsHandler(tornado.web.RequestHandler):
 
 
 # ===================================================================
+#  模型编辑（v0.3.1：编辑成功后同步刷新正在使用该模型的活动会话）
+# ===================================================================
+
+async def update_model_and_refresh(model_name: str, model) -> dict:
+    """更新模型配置，并刷新正在使用该模型的活动会话组件。
+
+    cbhcli 的 update_model 只写 config.json；活动会话（WebChatSession）的
+    llm_client/token_counter/context_compressor/context_window 是创建时构建的缓存，
+    不会自动感知配置变化 → 用户编辑当前使用的模型（改 context_limit/温度/密钥等）
+    后"不生效"。这里在编辑成功后对使用该模型的每个会话原地重建这些组件
+    （逻辑对齐 ChatSwitchModelHandler 的原地切换，但保留会话消息与模型名）。
+    """
+    # 同步端点放线程执行（含 config 读写），与 api_handler 一致
+    result = await asyncio.to_thread(update_model, model_name, model)
+    try:
+        config = get_config()
+        model_config = config.get_model(model_name)
+        if not model_config:
+            return result
+        from cbhcli_pkg.core.model import LLMClient
+        from cbhcli_pkg.context.token_counter import get_token_counter
+        from cbhcli_pkg.context.compressor import ContextCompressor
+        for cs in list(_chat_sessions.values()):
+            if getattr(cs, "model_name", None) != model_name:
+                continue
+            cs.llm_client = LLMClient(model_config)
+            cs.token_counter = get_token_counter(model_config.get("model"))
+            cs.context_compressor = ContextCompressor(
+                cs.llm_client, cs.token_counter,
+                workspace_path=getattr(cs.agent_config, "workspace_path", None))
+            if cs.context_window:
+                cs.context_window.model_limit = cs.llm_client.context_limit
+            if cs.app_proxy:
+                cs.app_proxy.llm_client = cs.llm_client
+                cs.app_proxy.token_counter = cs.token_counter
+                cs.app_proxy.context_compressor = cs.context_compressor
+    except Exception:
+        logger.exception("模型编辑后刷新活动会话失败（配置已保存）")
+    return result
+
+
+# ===================================================================
 #  路由表
 # ===================================================================
 
@@ -812,7 +874,8 @@ handlers = [
         "delete": spec(delete_rerank_model),
     })),
     (rf"{PREFIX}/models/(?P<model_name>[^/]+)", api_handler({
-        "put": spec(update_model, model_cls=ModelConfig, body_arg="model", path_args=("model_name",)),
+        # v0.3.1：编辑成功后刷新正在使用该模型的活动会话（修复编辑不生效）
+        "put": spec(update_model_and_refresh, model_cls=ModelConfig, body_arg="model", path_args=("model_name",)),
         "delete": spec(delete_model, path_args=("model_name",)),
     })),
 
@@ -844,6 +907,8 @@ handlers = [
         "put": spec(update_agent, model_cls=AgentUpdate, body_arg="update", path_args=("agent_name",)),
         "delete": spec(delete_agent, path_args=("agent_name",)),
     })),
+    # v0.3.1：持久化所选 Agent（写 active_agent，插件启动时恢复，对齐 CLI/Web）
+    (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/select", api_handler({"post": spec(select_agent, path_args=("agent_name",))})),
 
     # --- 历史会话 ---
     (rf"{PREFIX}/agents/(?P<agent_name>[^/]+)/history", api_handler({"get": spec(list_history, path_args=("agent_name",))})),

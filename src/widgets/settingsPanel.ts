@@ -15,7 +15,8 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../api';
 interface ModelInfo {
   name: string;
   model: string;
-  baseUrl?: string;
+  /** 后端字段名是 url（与 cbhcli ModelConfig 一致，v0.3.1 修复，旧版误用 baseUrl 导致编辑 422） */
+  url?: string;
   apiKey?: string;
   vision?: boolean;
   thinking?: boolean | string | null;
@@ -64,7 +65,8 @@ function el(tag: string, attrs: Record<string, any> = {}, ...children: any[]): H
 
 export class SettingsPanel extends Widget {
   private _root!: HTMLElement;
-  /** 各分区折叠状态（key -> true=收起）。跨 refresh 保留（v0.2.15 通用折叠）。 */
+  /** 各分区折叠状态（key -> false=展开，其余/未记录=收起）。
+   * v0.3.1：默认全部收起只显示大类标题；用户手动展开的状态跨 refresh 保留。 */
   private _collapsed: { [key: string]: boolean } = {};
 
   constructor(private _ctx: SettingsCtx) {
@@ -131,7 +133,7 @@ export class SettingsPanel extends Widget {
         el('div', { class: 'cbhcli-model-name' }, `${m.name === current ? '● ' : ''}${m.name}  ${tags.join(' ')}`)
       );
       info.appendChild(
-        el('div', { class: 'cbhcli-model-detail' }, `${m.model || ''}${m.baseUrl ? ' @ ' + m.baseUrl : ''}`)
+        el('div', { class: 'cbhcli-model-detail' }, `${m.model || ''}${m.url ? ' @ ' + m.url : ''}`)
       );
       card.appendChild(info);
       const btns = el('div', { class: 'cbhcli-model-actions' });
@@ -484,7 +486,9 @@ export class SettingsPanel extends Widget {
     const fields: [string, string, string, string?][] = [
       ['name', '名称', m?.name || '', '如 deepseek-chat'],
       ['model', '模型ID', m?.model || '', '如 deepseek-chat'],
-      ['baseUrl', 'Base URL', m?.baseUrl || '', '如 https://api.deepseek.com/v1'],
+      // v0.3.1：字段名必须是 url（后端 ModelConfig 的字段名），旧版误用 baseUrl
+      // 导致编辑时回显为空、保存时 422（缺 url 必填字段）→ 编辑不生效
+      ['url', 'Base URL', m?.url || '', '如 https://api.deepseek.com/v1'],
       ['apiKey', 'API Key', m?.apiKey || '', ''],
       ['context_limit', '上下文限制', m?.context_limit ? String(m.context_limit) : '', '如 128000'],
       ['temperature', 'Temperature', m?.temperature !== undefined ? String(m.temperature) : '', ''],
@@ -886,13 +890,18 @@ export class SettingsPanel extends Widget {
   //  通用
   // ------------------------------------------------------------------
 
+  /** 分区有效折叠状态（v0.3.1：默认收起，只显式记住用户手动展开的分区）。 */
+  private _isCollapsed(key: string): boolean {
+    return this._collapsed[key] !== false;
+  }
+
   /** 分区容器；传 key 则可折叠（点击标题行收起/展开，状态跨 refresh 保留，v0.2.15）。 */
   private _section(title: string, desc?: string, key?: string): HTMLElement {
     const group = el('div', { class: 'cbhcli-settings-group' + (key ? ' collapsible' : '') });
     const head = el('div', { class: 'cbhcli-section-head' });
     let chevron: HTMLElement | null = null;
     if (key) {
-      const collapsed = !!this._collapsed[key];
+      const collapsed = this._isCollapsed(key);
       if (collapsed) {
         group.classList.add('collapsed');
       }
@@ -906,10 +915,12 @@ export class SettingsPanel extends Widget {
     }
     if (key) {
       head.addEventListener('click', () => {
-        this._collapsed[key] = !this._collapsed[key];
-        group.classList.toggle('collapsed', this._collapsed[key]);
+        const nextCollapsed = !this._isCollapsed(key);
+        // 显式记录状态：false=展开（跨 refresh 保留），true=收起
+        this._collapsed[key] = nextCollapsed;
+        group.classList.toggle('collapsed', nextCollapsed);
         if (chevron) {
-          chevron.textContent = this._collapsed[key] ? '▸' : '▾';
+          chevron.textContent = nextCollapsed ? '▸' : '▾';
         }
       });
     }

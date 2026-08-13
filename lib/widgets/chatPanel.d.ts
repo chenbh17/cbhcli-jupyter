@@ -39,6 +39,7 @@ export declare class CbhcliPanel extends Widget {
     private _pathSlot;
     private _boundBrowserModel;
     private _agentName;
+    private _agentInited;
     private _modelName;
     private _busy;
     private _abortFn;

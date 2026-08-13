@@ -13,7 +13,8 @@ interface SettingsCtx {
 export declare class SettingsPanel extends Widget {
     private _ctx;
     private _root;
-    /** 各分区折叠状态（key -> true=收起）。跨 refresh 保留（v0.2.15 通用折叠）。 */
+    /** 各分区折叠状态（key -> false=展开，其余/未记录=收起）。
+     * v0.3.1：默认全部收起只显示大类标题；用户手动展开的状态跨 refresh 保留。 */
     private _collapsed;
     constructor(_ctx: SettingsCtx);
     refresh(): Promise<void>;
@@ -46,6 +47,8 @@ export declare class SettingsPanel extends Widget {
     private _fmtSize;
     private _addKnowledgeDialog;
     private _buildChainSection;
+    /** 分区有效折叠状态（v0.3.1：默认收起，只显式记住用户手动展开的分区）。 */
+    private _isCollapsed;
     /** 分区容器；传 key 则可折叠（点击标题行收起/展开，状态跨 refresh 保留，v0.2.15）。 */
     private _section;
     private _showDialog;

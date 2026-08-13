@@ -114,7 +114,10 @@ export class CbhcliPanel extends Widget {
   private _boundBrowserModel: any = null;
 
   // 会话状态
+  // v0.3.1：初始 Agent 在 _initChoices 中从后端 active_agent 恢复（与 CLI/Web 一致），
+  // 不再写死 main；_agentInited 防止后续 refresh 覆盖用户当前选择
   private _agentName = 'main';
+  private _agentInited = false;
   private _modelName = '';
   private _busy = false;
   private _abortFn: (() => void) | null = null;
@@ -307,12 +310,26 @@ export class CbhcliPanel extends Widget {
       void this._settings.refresh();
     });
 
-    // Enter 发送 / Shift+Enter 换行（仅面板内输入框）
+    // Enter 发送 / Shift+Enter 或 Alt+Enter 换行（仅面板内输入框）
     this._inputEl.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this._send();
+      if (e.key !== 'Enter') {
+        return;
       }
+      if (e.shiftKey) {
+        return; // Shift+Enter：浏览器默认换行行为
+      }
+      if (e.altKey) {
+        // Alt+Enter：换行（v0.3.1）——部分浏览器 Alt+Enter 默认不插入换行，手动插入
+        e.preventDefault();
+        const ta = this._inputEl;
+        const start = ta.selectionStart ?? ta.value.length;
+        const end = ta.selectionEnd ?? start;
+        ta.value = ta.value.slice(0, start) + '\n' + ta.value.slice(end);
+        ta.selectionStart = ta.selectionEnd = start + 1;
+        return;
+      }
+      e.preventDefault();
+      this._send();
     });
 
     return root;
@@ -501,7 +518,7 @@ export class CbhcliPanel extends Widget {
   private async _initChoices(loadSettings: boolean): Promise<void> {
     try {
       const [agents, models] = await Promise.all([
-        apiGet<{ agents?: { name: string }[] }>('agents'),
+        apiGet<{ agents?: { name: string }[]; active_agent?: string }>('agents'),
         apiGet<{ models?: { name: string }[]; last_selected?: string }>('models')
       ]);
       this._agentSelect.innerHTML = '';
@@ -511,6 +528,18 @@ export class CbhcliPanel extends Widget {
       this._modelSelect.innerHTML = '';
       for (const m of models?.models || []) {
         this._modelSelect.appendChild(el('option', { value: m.name }, m.name));
+      }
+      // v0.3.1：首次初始化时恢复上次选择的 Agent（active_agent，与 CLI/Web 一致），
+      // 不再固定 main；之后 _agentInited=true 防止覆盖用户当前选择
+      if (!this._agentInited) {
+        const names = (agents?.agents || []).map(a => a.name);
+        const active = agents?.active_agent;
+        if (active && names.includes(active)) {
+          this._agentName = active;
+        } else if (names.length > 0) {
+          this._agentName = names[0];
+        }
+        this._agentInited = true;
       }
       if (models?.last_selected && !this._modelName) {
         this._modelName = models.last_selected;
@@ -531,6 +560,9 @@ export class CbhcliPanel extends Widget {
 
   private _onAgentChange(): void {
     this._agentName = this._agentSelect.value;
+    // v0.3.1：持久化所选 Agent（写 config.json 的 active_agent，与 CLI /agent use 一致），
+    // 下次启动插件自动恢复
+    void apiPost(`agents/${encodeURIComponent(this._agentName)}/select`).catch(() => undefined);
     this._messagesEl.innerHTML = '';
     this._refreshStatus();
     void this._settings.refresh();
@@ -1238,7 +1270,14 @@ export class CbhcliPanel extends Widget {
         }
       },
       err => {
-        this._addSystemNote(`❌ 连接错误: ${err.message}`);
+        // v0.3.1：409 conflict 友好提示（中断后上一请求尚在收尾；后端已会等待锁释放，
+        // 仍报 409 说明上一请求长时间未结束）
+        const msg = err?.message || '';
+        if (/处理中|Conflict/i.test(msg)) {
+          this._addSystemNote('⚠️ 上一请求尚未结束（可能正在收尾），请稍候再发送');
+        } else {
+          this._addSystemNote(`❌ 连接错误: ${msg}`);
+        }
       },
       () => {
         this._setBusy(false);
