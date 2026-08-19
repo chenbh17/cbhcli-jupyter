@@ -87,7 +87,19 @@ export function streamChat(
   signal?: AbortSignal
 ): () => void {
   const controller = new AbortController();
-  const abort = () => controller.abort();
+  // v0.3.2：标记是否为我们主动中断。ServerConnection.makeRequest 会把 fetch 的
+  // 拒绝（含主动 abort）包装成 NetworkError extends TypeError（name 不再是
+  // 'AbortError'，message 为 "signal is aborted without reason"），仅靠
+  // err.name === 'AbortError' 判断会漏掉 -> 误报 "❌ 连接错误"。
+  let abortedByUs = false;
+  const abort = () => {
+    abortedByUs = true;
+    try {
+      controller.abort();
+    } catch {
+      /* ignore */
+    }
+  };
 
   if (signal) {
     if (signal.aborted) {
@@ -154,7 +166,12 @@ export function streamChat(
       }
     })
     .catch(err => {
-      if (err?.name === 'AbortError') {
+      // 主动中断不算错误：三重判定（本地标记 / AbortError 名称 / 中断消息）
+      if (
+        abortedByUs ||
+        err?.name === 'AbortError' ||
+        /signal is aborted|user aborted/i.test(String(err?.message || ''))
+      ) {
         return;
       }
       onError(err instanceof Error ? err : new Error(String(err)));

@@ -11,7 +11,6 @@
 
 import { INotebookTracker, NotebookPanel, NotebookActions } from '@jupyterlab/notebook';
 import { CodeCell } from '@jupyterlab/cells';
-import { OutputArea } from '@jupyterlab/outputarea';
 import { JupyterFrontEnd } from '@jupyterlab/application';
 
 import { apiGet, apiPost } from '../api';
@@ -1111,30 +1110,34 @@ export class NotebookClient {
         } catch {
           /* ignore */
         }
+        // 复位运行态提示符（与 CodeCell.execute 的异常路径一致），避免 [*] 卡死
+        this._setExecState(cell, 'idle');
         rej(new Error(`执行超时（${timeoutMs / 1000}s），已中断`));
       }, timeoutMs);
     });
     let reply: any;
     try {
+      // v0.3.2：改用高层 API CodeCell.execute（Shift+Enter 同款）。
+      // 内部同样走 OutputArea.execute 实时渲染输出，且会：
+      //   ① 置 model.executionState='running' -> cell 左侧显示 In [ * ]:（v0.3.1 缺失该指示）
+      //   ② 事务内 clearExecution（清输出+复位序号）+ trusted
+      //   ③ 成功: executionCount=reply 序号 -> 显示 In [N]: 且自动 idle；异常: executionState='idle'
       reply = await Promise.race([
-        OutputArea.execute(code, cell.outputArea, sessionContext),
+        CodeCell.execute(cell, sessionContext),
         timeoutPromise
       ]);
     } catch (err: any) {
       window.clearTimeout(timer);
+      this._setExecState(cell, 'idle');
       return fail(err?.message || String(err));
     }
     window.clearTimeout(timer);
+    if (reply === undefined) {
+      // 空代码/内核缺失等场景 CodeCell.execute 直接返回 undefined（已静默处理）
+      return fail('执行未发起（代码为空或内核未就绪）');
+    }
 
     const { outputs, errorText, resultText } = this._extractCellOutputs(cell);
-    const ec = reply?.content?.execution_count;
-    if (ec !== undefined && ec !== null) {
-      try {
-        (cell.model as any).executionCount = ec;
-      } catch {
-        /* ignore */
-      }
-    }
     if (errorText) {
       return {
         success: false,
@@ -1149,6 +1152,15 @@ export class NotebookClient {
       error: '',
       data: { result: resultText }
     };
+  }
+
+  /** 设置 cell 运行态（驱动左侧 In [ * ]: / In [N]: 提示符）。 */
+  private _setExecState(cell: CodeCell, state: string): void {
+    try {
+      (cell.model as any).executionState = state;
+    } catch {
+      /* ignore */
+    }
   }
 
   /** 从 cell 输出区提取文本输出（供回传 Agent）。 */

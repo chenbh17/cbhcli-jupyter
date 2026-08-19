@@ -118,6 +118,23 @@ class UITaskQueue:
             task.complete(result)
             return True
 
+    def cancel_all(self, reason: str = "用户已中断") -> int:
+        """立即以失败结果完成所有未完成任务，返回取消数量。
+
+        v0.3.2：用户点击「停止」时由 ChatAbortHandler 调用。
+        notebook 工具线程阻塞在 task.wait()（最长可达 300s）等前端回传，
+        若不主动唤醒，ReAct 循环要等当前工具超时/完成才能在中断检查点退出，
+        表现为"停止不停任务"。取消后工具线程立刻拿到失败结果返回，
+        循环在工具边界检查 cs.abort 即终止。
+        """
+        with self._mutex:
+            n = 0
+            for t in list(self._tasks.values()):
+                if not t._done.is_set():
+                    t.complete({"success": False, "output": "", "error": reason})
+                    n += 1
+            return n
+
     def _cleanup(self) -> None:
         """清理已完成/过期的任务（防止内存泄漏）。"""
         now = time.time()

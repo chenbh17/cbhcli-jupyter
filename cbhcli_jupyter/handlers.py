@@ -221,7 +221,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.3.1",
+            "version": "0.3.2",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -342,6 +342,21 @@ class ChatMessagesHandler(tornado.web.RequestHandler):
 class ChatHandler(tornado.web.RequestHandler):
     """SSE 流式聊天端点（完整 ReAct 工具执行循环，与 cbhcli web 一致）。"""
 
+    def _set_stream_session(self, cs) -> None:
+        """记录当前 SSE 流绑定的会话（on_connection_close 用）。"""
+        self._cs = cs
+
+    def on_connection_close(self):
+        """客户端断开 SSE 连接（页面关闭/刷新/强断兜底）时请求中断。
+
+        v0.3.2：对齐 cbhcli Web（FastAPI 断流即取消生成器）。tornado 不会自动
+        取消 handler 协程，若不置 abort，后端会在无人消费的情况下把整轮
+        ReAct 循环跑完（工具照常执行），白白消耗 API 与算力。
+        """
+        cs = getattr(self, "_cs", None)
+        if cs is not None:
+            cs.abort = True
+
     async def post(self):
         body = _parse_body(self)
         agent_name = body.get("agent_name", "") or "main"
@@ -366,6 +381,7 @@ class ChatHandler(tornado.web.RequestHandler):
             cs = chat_api.get_or_create_session(agent_name, model_name)
         except HTTPException as e:
             raise tornado.web.HTTPError(e.status_code or 400, getattr(e, "detail", str(e)))
+        self._set_stream_session(cs)
 
         if cs.lock.locked():
             # v0.3.1：中断（abort）后上一请求可能仍在收尾——工具执行不可被立即打断，
@@ -472,6 +488,14 @@ class ChatAbortHandler(tornado.web.RequestHandler):
         cs = chat_api.get_session(agent_name, model_name)
         if cs:
             cs.abort = True
+        # v0.3.2：立即取消所有未完成的 notebook UI 任务。
+        # notebook 工具线程阻塞在 task.wait() 等前端回传（最长 300s），
+        # 不取消的话 ReAct 循环要等当前工具结束才能在中断检查点退出，
+        # 表现为"停止不停任务"（notebook cell 一路跑完）。
+        try:
+            task_queue.cancel_all("用户已中断")
+        except Exception:
+            pass
         _send_json(self, {"message": "已请求中断"})
 
 

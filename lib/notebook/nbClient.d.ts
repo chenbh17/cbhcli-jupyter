@@ -113,6 +113,8 @@ export declare class NotebookClient {
     private _executeCell;
     /** 在指定 cell 内执行代码：输出实时渲染到 cell 的输出区，完成后提取输出回传。 */
     private _executeCellInPlace;
+    /** 设置 cell 运行态（驱动左侧 In [ * ]: / In [N]: 提示符）。 */
+    private _setExecState;
     /** 从 cell 输出区提取文本输出（供回传 Agent）。 */
     private _extractCellOutputs;
     private _executeCode;
