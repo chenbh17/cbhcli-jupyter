@@ -538,6 +538,11 @@ export class CbhcliPanel extends Widget {
       }
       this._hideBackendError();
     } catch (err: any) {
+      // v5.4.0（认证系统）：本机未登录 -> 未登录提示条（引导 cbhcli login / web 登录界面）
+      if (err?.notLoggedIn) {
+        this._showNotLoggedIn();
+        return;
+      }
       // /info 返回 500（诊断模式）时 requestAPI 抛 ResponseError--
       // 尝试读取响应体里的精确错误与安装指引，失败则用通用文案
       let error = '无法连接 cbhcli 后端服务';
@@ -618,6 +623,22 @@ export class CbhcliPanel extends Widget {
   /** v0.3.3：隐藏后端错误横幅。 */
   private _hideBackendError(): void {
     this._backendErrorEl.classList.add('cbhcli-hidden');
+  }
+
+  /** v5.4.0（认证系统）：显示未登录提示横幅（引导 cbhcli login / web 登录界面）。 */
+  private _showNotLoggedIn(): void {
+    this._backendErrorEl.innerHTML = '';
+    this._backendErrorEl.appendChild(
+      el('div', { class: 'cbhcli-backend-error-title' }, '🔐 未登录')
+    );
+    this._backendErrorEl.appendChild(
+      el(
+        'div',
+        { class: 'cbhcli-backend-error-msg' },
+        '本机尚未登录 cbhcli。请在终端运行 cbhcli login，或打开 cbhcli web 页面（登录界面）登录，完成后刷新页面。'
+      )
+    );
+    this._backendErrorEl.classList.remove('cbhcli-hidden');
   }
 
   private _onAgentChange(): void {
@@ -1348,6 +1369,11 @@ export class CbhcliPanel extends Widget {
         }
       },
       err => {
+        // v5.4.0（认证系统）：本机未登录 -> 未登录提示条
+        if (err?.notLoggedIn) {
+          this._showNotLoggedIn();
+          return;
+        }
         // v0.3.1：409 conflict 友好提示（中断后上一请求尚在收尾；后端已会等待锁释放，
         // 仍报 409 说明上一请求长时间未结束）
         const msg = err?.message || '';

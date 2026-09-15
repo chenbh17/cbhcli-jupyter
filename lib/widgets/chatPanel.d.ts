@@ -63,6 +63,8 @@ export declare class CbhcliPanel extends Widget {
     private _showBackendError;
     /** v0.3.3：隐藏后端错误横幅。 */
     private _hideBackendError;
+    /** v5.4.0（认证系统）：显示未登录提示横幅（引导 cbhcli login / web 登录界面）。 */
+    private _showNotLoggedIn;
     private _onAgentChange;
     private _onModelChange;
     private _refreshStatus;

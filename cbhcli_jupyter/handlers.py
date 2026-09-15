@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import os
+import time
 from typing import Optional
 
 import tornado.web
@@ -321,7 +322,7 @@ class InfoHandler(tornado.web.RequestHandler):
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.3.3",
+            "version": "0.3.4",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -1082,3 +1083,72 @@ handlers = [
     (rf"{PREFIX}/chat/use-chain", ChainUseHandler),
     (rf"{PREFIX}/chat/off-chain", ChainOffHandler),
 ]
+
+
+# ===================================================================
+#  认证系统（v5.4.0）：prepare 级登录检查注入
+#
+#  prepare 在 get/post/put/delete 之前被 tornado 调用；未登录时直接 401
+#  并 finish，业务方法不会执行，覆盖 chat 与全部管理 API（含 notebook
+#  任务桥），防止只拦聊天不拦配置/历史接口。
+#  cbhcli_pkg 导入失败（诊断模式）时保持原样，不影响降级诊断。
+# ===================================================================
+
+_auth_cache = {"ts": 0.0, "ok": False}
+_AUTH_CACHE_TTL = 5.0    # 秒（notebook/pending 200ms 轮询场景的轻量缓存）
+
+
+def _jupyter_auth_ok() -> bool:
+    """带 5s 缓存的登录检查（require_login 内部有 6h 在线复核节流）"""
+    now = time.time()
+    if now - _auth_cache["ts"] < _AUTH_CACHE_TTL:
+        return bool(_auth_cache["ok"])
+    try:
+        from cbhcli_pkg.auth import require_login
+        ok = require_login("jupyter", interactive=False)
+    except Exception:
+        ok = True   # 认证系统故障不拦截（与"软在线"策略一致）
+    _auth_cache["ts"] = now
+    _auth_cache["ok"] = ok
+    return ok
+
+
+def _inject_auth_guard(handlers_list) -> None:
+    """为所有业务 handler 注入 prepare 级登录检查（认证系统 v5.4.0）"""
+    if CBHCLI_IMPORT_ERROR:
+        return   # 诊断模式：保持原样（所有 API 已返回安装指引）
+    try:
+        from cbhcli_pkg.auth import require_login  # noqa: F401 可用性探测
+    except Exception:
+        return
+
+    for pattern, cls in handlers_list:
+        if not isinstance(cls, type):
+            continue
+        if getattr(cls, "_cbhcli_auth_guarded", False):
+            continue
+        orig_prepare = getattr(cls, "prepare", None)
+
+        def _prepare(self, _orig=orig_prepare):
+            try:
+                if not _jupyter_auth_ok():
+                    self.set_status(401)
+                    self.set_header("Content-Type", "application/json")
+                    self.finish(json.dumps({
+                        "error": "not_logged_in",
+                        "message": "本机未登录 cbhcli，请运行 cbhcli login，"
+                                   "或打开 cbhcli web 页面登录",
+                    }, ensure_ascii=False))
+                    return
+                from cbhcli_pkg.auth import get_reporter
+                get_reporter().start("jupyter")      # 幂等懒启动
+            except Exception:
+                pass
+            if _orig:
+                return _orig(self)
+
+        cls.prepare = _prepare
+        cls._cbhcli_auth_guarded = True
+
+
+_inject_auth_guard(handlers)

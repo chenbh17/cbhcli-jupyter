@@ -27,11 +27,24 @@ export async function requestAPI<T = any>(
   );
   if (!response.ok) {
     let detail: string = response.statusText;
+    let code = '';
+    let serverMessage = '';
     try {
       const data = await response.json();
       detail = data?.error || detail;
+      code = data?.error || '';
+      serverMessage = data?.message || '';
     } catch {
       /* 保持 statusText */
+    }
+    // v5.4.0（认证系统）：本机未登录 -> 抛带标记的错误（前端显示未登录提示条）
+    if (response.status === 401 && code === 'not_logged_in') {
+      const authErr: any = new ServerConnection.ResponseError(
+        response,
+        serverMessage || '本机未登录 cbhcli'
+      );
+      authErr.notLoggedIn = true;
+      throw authErr;
     }
     throw new ServerConnection.ResponseError(response, detail);
   }
@@ -82,7 +95,7 @@ export function streamChat(
     nb_enabled?: boolean;
   },
   onEvent: (ev: any) => void,
-  onError: (err: Error) => void,
+  onError: (err: Error & { notLoggedIn?: boolean }) => void,
   onDone: () => void,
   signal?: AbortSignal
 ): () => void {
@@ -122,11 +135,23 @@ export function streamChat(
     .then(async response => {
       if (!response.ok) {
         let detail: string = response.statusText;
+        let code = '';
+        let serverMessage = '';
         try {
           const data = await response.json();
           detail = data?.error || detail;
+          code = data?.error || '';
+          serverMessage = data?.message || '';
         } catch {
           /* ignore */
+        }
+        // v5.4.0（认证系统）：本机未登录 -> 带标记的错误（前端显示未登录提示条）
+        if (response.status === 401 && code === 'not_logged_in') {
+          const authErr: any = new Error(
+            serverMessage || '本机未登录 cbhcli'
+          );
+          authErr.notLoggedIn = true;
+          throw authErr;
         }
         throw new Error(detail);
       }

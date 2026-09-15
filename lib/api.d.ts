@@ -28,4 +28,6 @@ export declare function streamChat(payload: {
     cwd?: string;
     /** 小眼睛严格模式：仅当注入了选区上下文时为 true，后端据此启用/禁用 nb 工具 */
     nb_enabled?: boolean;
-}, onEvent: (ev: any) => void, onError: (err: Error) => void, onDone: () => void, signal?: AbortSignal): () => void;
+}, onEvent: (ev: any) => void, onError: (err: Error & {
+    notLoggedIn?: boolean;
+}) => void, onDone: () => void, signal?: AbortSignal): () => void;
