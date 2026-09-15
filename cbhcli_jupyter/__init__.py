@@ -10,7 +10,15 @@ import json
 from jupyter_server.extension.application import ExtensionApp
 
 from .handlers import handlers
-from . import chat_api  # noqa: F401  确保会话管理模块被加载
+
+# v0.3.3：chat_api 依赖 cbhcli_pkg--未安装（或版本过旧）时导入失败。
+# 此时 handlers.py 已进入诊断模式（占位 chat_api + 所有 API 返回安装指引），
+# 扩展本身必须继续加载，否则前端 UI 正常显示但所有 API 404 且无任何提示
+# （Windows "可以显示但模型/Agent 识别不到"的根因）。
+try:
+    from . import chat_api  # noqa: F401  确保会话管理模块被加载
+except Exception:  # pragma: no cover - 仅 cbhcli_pkg 缺失时触发
+    chat_api = None  # type: ignore[assignment]
 
 
 class CbhcliJupyterApp(ExtensionApp):

@@ -34,6 +34,7 @@ export declare class CbhcliPanel extends Widget {
     private _inputEl;
     private _sendBtn;
     private _stopBtn;
+    private _backendErrorEl;
     private _serverRoot;
     private _currentRelPath;
     private _pathSlot;
@@ -58,6 +59,10 @@ export declare class CbhcliPanel extends Widget {
     /** 构造附带选区上下文的完整消息。返回 {display, payload}。 */
     private _buildSelectionContext;
     private _initChoices;
+    /** v0.3.3：显示后端加载失败横幅（含安装指引）。 */
+    private _showBackendError;
+    /** v0.3.3：隐藏后端错误横幅。 */
+    private _hideBackendError;
     private _onAgentChange;
     private _onModelChange;
     private _refreshStatus;

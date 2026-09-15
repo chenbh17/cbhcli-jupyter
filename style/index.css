@@ -103,6 +103,38 @@
   min-height: 0;
 }
 
+/* ---------- 后端加载失败横幅（v0.3.3：cbhcli 未安装/版本不兼容时显示安装指引） ---------- */
+
+.cbhcli-backend-error {
+  margin: 10px 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #5c2e2e;
+  border-left: 3px solid #f85149;
+  border-radius: 6px;
+  background: #1f1214;
+  color: #e6b3b3;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cbhcli-backend-error-title {
+  color: #f85149;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.cbhcli-backend-error-msg {
+  word-break: break-word;
+}
+
+.cbhcli-backend-error-hint {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #5c2e2e;
+  color: #d2a8ff;
+  word-break: break-word;
+}
+
 /* ---------- 状态条（路径 + 上下文 + 小眼睛） ---------- */
 
 .cbhcli-status-strip {

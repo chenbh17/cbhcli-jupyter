@@ -14,93 +14,174 @@ from typing import Optional
 import tornado.web
 from fastapi import HTTPException
 
-from cbhcli_pkg.web.server import (
-    _sse,
-    _react_loop,
-    _get_session_key,
-    _chat_sessions,
-    _get_agent_config,
-    get_config,
-    get_agent_manager,
-    # 管理端点函数（复用，保持与 cbhcli Web 一致）
-    get_info,
-    get_settings,
-    update_settings,
-    list_models,
-    add_model,
-    update_model,
-    delete_model,
-    select_model,
-    update_embedding_model,
-    delete_embedding_model,
-    update_rerank_model,
-    delete_rerank_model,
-    get_fallback,
-    add_fallback,
-    clear_fallback,
-    remove_fallback,
-    reorder_fallback,
-    get_permissions,
-    set_permission_mode,
-    update_permission_rule,
-    get_hooks,
-    reload_hooks,
-    list_backups,
-    undo_backup,
-    list_agents,
-    create_agent,
-    get_agent,
-    update_agent,
-    delete_agent,
-    select_agent,
-    list_history,
-    get_history,
-    delete_history,
-    list_tools,
-    toggle_tool,
-    list_skills,
-    activate_skills,
-    deactivate_skill,
-    WebChatSession,
-    # pydantic 请求模型
-    ModelConfig,
-    EmbeddingModelConfig,
-    RerankModelConfig,
-    AgentCreate,
-    AgentUpdate,
-    SettingsUpdate,
-    FallbackAdd,
-    FallbackReorder,
-    ModeUpdate,
-    PermissionRuleUpdate,
-    UndoRequest,
-    Toggle,
-    SkillActivate,
-    # MCP 管理（复用 cbhcli web 端点函数）
-    list_mcp_servers,
-    add_mcp_server,
-    remove_mcp_server,
-    refresh_mcp_server,
-    list_mcp_server_tools,
-    toggle_mcp_tool,
-    MCPServerAdd,
-    # Agent 链条（list 复用端点函数；use/off 需自定义 handler 操作会话）
-    list_chains,
-    _get_chain_manager,
-    # 知识库管理（复用 cbhcli web 端点函数，v0.2.15）
-    list_knowledge,
-    add_knowledge_file,
-    remove_knowledge_file,
-    reindex_knowledge,
-    embedding_status,
-    embedding_index,
-    KnowledgeAdd,
-)
-from cbhcli_pkg.core.session_history import SessionHistoryManager
-from cbhcli_pkg.tools.python_tool import remove_python_session
+# ===================================================================
+#  cbhcli_pkg 导入（v0.3.3：失败时降级为诊断模式而非整个扩展崩溃）
+#
+#  背景：cbhcli 不在 PyPI 上，插件 whl 以 --no-deps 安装时 cbhcli_pkg
+#  可能不存在（或版本过旧缺少所需端点函数）。旧版行为：本模块 import
+#  直接失败 -> jupyter server extension 加载崩溃（错误只藏在启动日志里）
+#  -> 前端 UI（federated extension，独立加载）照常显示 -> 所有 API 404
+#  -> 模型/Agent 列表全空且无任何提示（Windows 用户表现为"不适配"）。
+#
+#  现在：import 失败时注入占位符号，路由全部正常注册；每个 API 响应
+#  500 + 诊断信息，/info 返回安装指引，前端显示醒目错误横幅。
+# ===================================================================
+CBHCLI_IMPORT_ERROR: Optional[str] = None
 
-from . import chat_api
-from .nb_task_queue import task_queue
+try:
+    from cbhcli_pkg.web.server import (
+        _sse,
+        _react_loop,
+        _get_session_key,
+        _chat_sessions,
+        _get_agent_config,
+        get_config,
+        get_agent_manager,
+        # 管理端点函数（复用，保持与 cbhcli Web 一致）
+        get_info,
+        get_settings,
+        update_settings,
+        list_models,
+        add_model,
+        update_model,
+        delete_model,
+        select_model,
+        update_embedding_model,
+        delete_embedding_model,
+        update_rerank_model,
+        delete_rerank_model,
+        get_fallback,
+        add_fallback,
+        clear_fallback,
+        remove_fallback,
+        reorder_fallback,
+        get_permissions,
+        set_permission_mode,
+        update_permission_rule,
+        get_hooks,
+        reload_hooks,
+        list_backups,
+        undo_backup,
+        list_agents,
+        create_agent,
+        get_agent,
+        update_agent,
+        delete_agent,
+        select_agent,
+        list_history,
+        get_history,
+        delete_history,
+        list_tools,
+        toggle_tool,
+        list_skills,
+        activate_skills,
+        deactivate_skill,
+        WebChatSession,
+        # pydantic 请求模型
+        ModelConfig,
+        EmbeddingModelConfig,
+        RerankModelConfig,
+        AgentCreate,
+        AgentUpdate,
+        SettingsUpdate,
+        FallbackAdd,
+        FallbackReorder,
+        ModeUpdate,
+        PermissionRuleUpdate,
+        UndoRequest,
+        Toggle,
+        SkillActivate,
+        # MCP 管理（复用 cbhcli web 端点函数）
+        list_mcp_servers,
+        add_mcp_server,
+        remove_mcp_server,
+        refresh_mcp_server,
+        list_mcp_server_tools,
+        toggle_mcp_tool,
+        MCPServerAdd,
+        # Agent 链条（list 复用端点函数；use/off 需自定义 handler 操作会话）
+        list_chains,
+        _get_chain_manager,
+        # 知识库管理（复用 cbhcli web 端点函数，v0.2.15）
+        list_knowledge,
+        add_knowledge_file,
+        remove_knowledge_file,
+        reindex_knowledge,
+        embedding_status,
+        embedding_index,
+        KnowledgeAdd,
+    )
+    from cbhcli_pkg.core.session_history import SessionHistoryManager
+    from cbhcli_pkg.tools.python_tool import remove_python_session
+    from . import chat_api
+except Exception:  # ImportError / AttributeError（旧版本缺符号）等
+    import traceback
+    CBHCLI_IMPORT_ERROR = traceback.format_exc(limit=8)
+
+from .nb_task_queue import task_queue  # 纯队列，不依赖 cbhcli_pkg
+
+
+def _import_error_message() -> str:
+    """生成给用户看的导入失败摘要（含最后一条 traceback 行）。"""
+    lines = [l for l in (CBHCLI_IMPORT_ERROR or "").strip().splitlines() if l.strip()]
+    detail = lines[-1] if lines else "未知错误"
+    return (
+        "cbhcli 后端组件不可用（cbhcli 未安装或版本不兼容），"
+        f"无法处理此请求。导入错误: {detail}"
+    )
+
+
+if CBHCLI_IMPORT_ERROR:
+    logging.getLogger("cbhcli_jupyter").error(
+        "cbhcli_pkg 导入失败，插件进入诊断模式（API 将返回错误与安装指引）:\n%s",
+        CBHCLI_IMPORT_ERROR,
+    )
+
+    # 为所有被引用的符号注入占位（调用时抛 RuntimeError -> _handle_error -> 500）
+    _PLACEHOLDER_NAMES = (
+        "_sse _react_loop _get_session_key _chat_sessions _get_agent_config "
+        "get_config get_agent_manager "
+        "get_info get_settings update_settings "
+        "list_models add_model update_model delete_model select_model "
+        "update_embedding_model delete_embedding_model "
+        "update_rerank_model delete_rerank_model "
+        "get_fallback add_fallback clear_fallback remove_fallback reorder_fallback "
+        "get_permissions set_permission_mode update_permission_rule "
+        "get_hooks reload_hooks list_backups undo_backup "
+        "list_agents create_agent get_agent update_agent delete_agent select_agent "
+        "list_history get_history delete_history "
+        "list_tools toggle_tool list_skills activate_skills deactivate_skill "
+        "WebChatSession "
+        "ModelConfig EmbeddingModelConfig RerankModelConfig AgentCreate AgentUpdate "
+        "SettingsUpdate FallbackAdd FallbackReorder ModeUpdate PermissionRuleUpdate "
+        "UndoRequest Toggle SkillActivate "
+        "list_mcp_servers add_mcp_server remove_mcp_server refresh_mcp_server "
+        "list_mcp_server_tools toggle_mcp_tool MCPServerAdd "
+        "list_chains _get_chain_manager "
+        "list_knowledge add_knowledge_file remove_knowledge_file reindex_knowledge "
+        "embedding_status embedding_index KnowledgeAdd "
+        "SessionHistoryManager remove_python_session"
+    ).split()
+
+    def _make_placeholder(name: str):
+        def _fail(*args, **kwargs):
+            raise RuntimeError(_import_error_message())
+        _fail.__name__ = name
+        return _fail
+
+    for _n in _PLACEHOLDER_NAMES:
+        if _n not in globals():
+            globals()[_n] = _make_placeholder(_n)
+
+    # chat_api 占位模块：属性访问即抛错（get_or_create_session 等）
+    import types as _types
+
+    class _ChatApiFallback(_types.ModuleType):
+        def __getattr__(self, item):
+            raise RuntimeError(_import_error_message())
+
+    chat_api = _ChatApiFallback("chat_api")  # type: ignore[assignment]
+
 
 logger = logging.getLogger("cbhcli_jupyter")
 
@@ -167,6 +248,10 @@ def api_handler(methods):
     """
     class _ApiHandler(tornado.web.RequestHandler):
         async def _run(self, method):
+            # v0.3.3：cbhcli_pkg 导入失败（诊断模式）时统一返回错误与安装指引
+            if CBHCLI_IMPORT_ERROR:
+                _send_json(self, {"error": _import_error_message()}, status=500)
+                return
             sp = methods.get(method)
             if sp is None:
                 raise tornado.web.HTTPError(405, "方法不允许")
@@ -218,10 +303,25 @@ class InfoHandler(tornado.web.RequestHandler):
     """插件信息（前端初始化时调用）。"""
 
     def get(self):
+        # v0.3.3：cbhcli_pkg 导入失败时返回诊断信息（前端据此显示错误横幅）
+        if CBHCLI_IMPORT_ERROR:
+            _send_json(self, {
+                "status": "error",
+                "error": _import_error_message(),
+                "detail": CBHCLI_IMPORT_ERROR,
+                "hint": (
+                    "cbhcli_jupyter 依赖 cbhcli（不在 PyPI 上）。请先安装 "
+                    "cbhcli 的 whl 包（要求 >= 5.2.2）："
+                    "pip install cbhcli-x.y.z-py3-none-any.whl，"
+                    "安装到运行 JupyterLab 的同一 Python 环境，然后重启 "
+                    "JupyterLab。若已安装，请检查版本是否过旧。"
+                ),
+            }, status=500)
+            return
         _send_json(self, {
             "status": "ok",
             "name": "cbhcli_jupyter",
-            "version": "0.3.2",
+            "version": "0.3.3",
             "cbhcli_version": getattr(chat_api, "_cbhcli_version", None)
             or _safe_cbhcli_version(),
             "api": "v1",
@@ -358,6 +458,10 @@ class ChatHandler(tornado.web.RequestHandler):
             cs.abort = True
 
     async def post(self):
+        # v0.3.3：诊断模式（cbhcli_pkg 导入失败）统一返回错误与安装指引
+        if CBHCLI_IMPORT_ERROR:
+            _send_json(self, {"error": _import_error_message()}, status=500)
+            return
         body = _parse_body(self)
         agent_name = body.get("agent_name", "") or "main"
         model_name = body.get("model_name", "")

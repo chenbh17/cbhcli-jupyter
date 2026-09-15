@@ -107,6 +107,9 @@ export class CbhcliPanel extends Widget {
   private _sendBtn!: HTMLButtonElement;
   private _stopBtn!: HTMLButtonElement;
 
+  // v0.3.3：后端加载失败横幅（cbhcli 未安装/版本不兼容时显示安装指引）
+  private _backendErrorEl!: HTMLElement;
+
   // 路径跟踪
   private _serverRoot = '';
   private _currentRelPath = '';
@@ -208,6 +211,10 @@ export class CbhcliPanel extends Widget {
 
     // 问答视图
     const chatView = el('div', { class: 'cbhcli-chat-view' });
+
+    // v0.3.3：后端加载失败横幅（默认隐藏；cbhcli 未安装/版本不兼容时显示）
+    this._backendErrorEl = el('div', { class: 'cbhcli-backend-error cbhcli-hidden' });
+    chatView.appendChild(this._backendErrorEl);
 
     // 状态条：路径 + 上下文用量 + 小眼睛
     const statusStrip = el('div', { class: 'cbhcli-status-strip' });
@@ -516,6 +523,39 @@ export class CbhcliPanel extends Widget {
   // ------------------------------------------------------------------
 
   private async _initChoices(loadSettings: boolean): Promise<void> {
+    // v0.3.3：先检查后端健康状态。cbhcli 未安装/版本不兼容时（Windows 常见），
+    // 后端进入诊断模式：/info 返回 500 + status=error + 安装指引；
+    // /info 404 则说明 server extension 根本没加载。两种情况都显示横幅
+    // 而不是静默空列表（旧版表现："模型/Agent 识别不到"且无任何提示）。
+    try {
+      const info = await apiGet<any>('info');
+      if (info?.status === 'error') {
+        this._showBackendError(
+          info.error || 'cbhcli 后端组件不可用',
+          info.hint || ''
+        );
+        return;
+      }
+      this._hideBackendError();
+    } catch (err: any) {
+      // /info 返回 500（诊断模式）时 requestAPI 抛 ResponseError--
+      // 尝试读取响应体里的精确错误与安装指引，失败则用通用文案
+      let error = '无法连接 cbhcli 后端服务';
+      let hint =
+        'Jupyter 服务器上的 cbhcli_jupyter 扩展未正确加载，' +
+        '请查看 Jupyter 启动日志排查（常见原因：cbhcli 未安装到当前 Python 环境）。';
+      try {
+        const data = await err?.response?.clone?.().json?.();
+        if (data?.error) {
+          error = data.error;
+          hint = data.hint || hint;
+        }
+      } catch {
+        /* keep fallback */
+      }
+      this._showBackendError(error, hint);
+      return;
+    }
     try {
       const [agents, models] = await Promise.all([
         apiGet<{ agents?: { name: string }[]; active_agent?: string }>('agents'),
@@ -556,6 +596,28 @@ export class CbhcliPanel extends Widget {
     } catch (err) {
       console.error('[cbhcli-jupyter] 初始化失败', err);
     }
+  }
+
+  /** v0.3.3：显示后端加载失败横幅（含安装指引）。 */
+  private _showBackendError(error: string, hint: string): void {
+    this._backendErrorEl.innerHTML = '';
+    this._backendErrorEl.appendChild(
+      el('div', { class: 'cbhcli-backend-error-title' }, '⚠️ 后端不可用')
+    );
+    this._backendErrorEl.appendChild(
+      el('div', { class: 'cbhcli-backend-error-msg' }, error)
+    );
+    if (hint) {
+      this._backendErrorEl.appendChild(
+        el('div', { class: 'cbhcli-backend-error-hint' }, hint)
+      );
+    }
+    this._backendErrorEl.classList.remove('cbhcli-hidden');
+  }
+
+  /** v0.3.3：隐藏后端错误横幅。 */
+  private _hideBackendError(): void {
+    this._backendErrorEl.classList.add('cbhcli-hidden');
   }
 
   private _onAgentChange(): void {
